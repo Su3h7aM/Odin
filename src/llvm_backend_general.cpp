@@ -1107,6 +1107,10 @@ gb_internal lbValue lb_emit_load(lbProcedure *p, lbValue value) {
 	GB_ASSERT(is_type_pointer(value.type));
 	Type *t = type_deref(value.type);
 	LLVMValueRef v = LLVMBuildLoad2(p->builder, lb_type(p->module, t), value.value, "");
+
+	i64 alignment = type_align_of(t);
+	LLVMSetAlignment(v, cast(unsigned int)alignment);
+
 	return lbValue{v, t};
 }
 
