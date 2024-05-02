@@ -1148,7 +1148,11 @@ gb_internal lbValue lb_emit_struct_ep(lbProcedure *p, lbValue s, i32 index) {
 
 	GB_ASSERT_MSG(result_type != nullptr, "%s %d", type_to_string(t), index);
 	
-	return lb_emit_struct_ep_internal(p, s, index, result_type);
+	lbValue gep = lb_emit_struct_ep_internal(p, s, index, result_type);
+	if (is_type_struct(t) && t->Struct.is_packed) {
+		gep.is_packed = true;
+	}
+	return gep;
 }
 
 gb_internal lbValue lb_emit_tuple_ev(lbProcedure *p, lbValue value, i32 index) {
