@@ -96,7 +96,7 @@ when ODIN_NO_CRT {
 				// wasn't in the environment in the first place.
 				k_addr, v_addr := _kv_addr_from_val(v_curr, key)
 				if len(v_new) > len(v_curr) {
-					k_addr = ([^]u8)(runtime.heap_resize(k_addr, kv_size))
+					k_addr = ([^]u8)(runtime.heap_resize(k_addr, len(key) + len(v_curr) + 2, kv_size))
 					if k_addr == nil {
 						return .Out_Of_Memory
 					}
