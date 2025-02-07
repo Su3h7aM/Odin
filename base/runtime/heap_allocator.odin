@@ -36,7 +36,7 @@ heap_allocator_proc :: proc(
 		}
 		return transmute([]byte)Raw_Slice{ data = ptr, len = size }, nil
 	case .Alloc_Non_Zeroed:
-		ptr := heap_alloc(max(size, alignment), zero = false)
+		ptr := heap_alloc(max(size, alignment), zero_memory = false)
 		if ptr == nil {
 			return nil, .Out_Of_Memory
 		}
@@ -48,7 +48,7 @@ heap_allocator_proc :: proc(
 		}
 		return transmute([]byte)Raw_Slice{ data = ptr, len = size }, nil
 	case .Resize_Non_Zeroed:
-		ptr := heap_resize(old_memory, old_size, max(size, alignment), zero = false)
+		ptr := heap_resize(old_memory, old_size, max(size, alignment), zero_memory = false)
 		if ptr == nil {
 			return nil, .Out_Of_Memory
 		}
