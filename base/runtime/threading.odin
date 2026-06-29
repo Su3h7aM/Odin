@@ -22,6 +22,7 @@ get_current_thread_id :: proc "contextless" () -> int {
 	return local_thread_id
 }
 
+
 // Add a procedure that will be run at the end of a thread for the purpose of
 // deallocating state marked as `thread_local`.
 //
