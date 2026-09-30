@@ -835,6 +835,97 @@ bench_1_producer_n_consumer_for_m_alloc :: proc(thread_count: int, allocs_per_th
 	log.infof("ALLOC+FREE(% 3i threads): % 7i %s/thr in %v", thread_count, allocs_per_thread, fmt.tprintf("%s", type_info_of(T)),  done, location = location)
 }
 
+/*
+This test makes sure that threads which start and exit one after another keep
+reusing the same Segment instead of adopting every orphan and purging it again
+when they exit.
+*/
+test_thread_churn_reuses_segments :: proc() {
+	THREADS :: 600
+	ALLOCS  :: 16
+
+	Churn_Data :: struct {
+		most_segments: int,
+	}
+
+	churn_task :: proc(t: ^thread.Thread) {
+		data := cast(^Churn_Data)t.data
+		ptrs: [ALLOCS]rawptr
+		for &p in ptrs {
+			p = runtime.heap_alloc(64)
+			expect(p != nil)
+		}
+		data.most_segments = max(data.most_segments, runtime.get_local_heap_info().total_segments)
+		for p in ptrs {
+			runtime.heap_free(p)
+		}
+	}
+
+	data: Churn_Data
+	for _ in 0..<THREADS {
+		t := thread.create(churn_task)
+		t.init_context = context
+		t.data = &data
+		thread.start(t)
+		thread.join(t)
+		thread.destroy(t)
+	}
+
+	// Each thread needs one Segment for these few small allocations. Without
+	// reuse, the count grows with the number of threads that have run.
+	log.infof("Thread churn: the most Segments in one thread's heap was %i.", data.most_segments)
+	expect(data.most_segments <= 4)
+}
+
+/*
+This test asks for the sizes and alignments that past allocators have gone
+wrong on, the values at each edge of what can be represented, and makes sure
+each is either served or refused with an error. Nothing may wrap into a small
+allocation, and nothing may crash.
+*/
+test_hostile_requests :: proc() {
+	heap := runtime.heap_allocator()
+
+	sizes := [?]int{
+		0, 1, 7, 8, 9, 63, 64, 65, 4095, 4096, 1 << 20,
+		1 << 40, 1 << 46, 1 << 56,
+		max(int)/2, max(int) - 4095, max(int) - 63, max(int) - 15, max(int) - 1, max(int),
+		-1, min(int),
+	}
+	// Alignments which are powers of two, from none to far beyond what a bin can give.
+	alignments := [?]int{0, 1, 2, 8, 64, 128, 4096, 1 << 20, 1 << 62}
+
+	for size in sizes {
+		for alignment in alignments {
+			memory, err := heap.procedure(heap.data, .Alloc, size, alignment, nil, 0)
+			switch {
+			case size < 0 || alignment > runtime.ODIN_HEAP_MAX_ALIGNMENT:
+				expect(err == .Invalid_Argument)
+			case size <= 1 << 20:
+				expect(err == nil)
+				expect(len(memory) == size)
+				expect(alignment == 0 || uintptr(raw_data(memory)) % uintptr(alignment) == 0)
+				// The whole of what was promised has to be writable.
+				for i in 0..<size {
+					memory[i] = 0xAA
+				}
+			case:
+				// Too large to be backed, or else backed, but never a wrapped size.
+				expect(err == nil || err == .Out_Of_Memory)
+				expect(size < 1 << 40 || err == .Out_Of_Memory)
+			}
+			if err == nil {
+				_, free_err := heap.procedure(heap.data, .Free, 0, 0, raw_data(memory), len(memory))
+				expect(free_err == nil)
+			}
+		}
+	}
+
+	// An alignment which is not a power of two is refused as well.
+	_, err := heap.procedure(heap.data, .Alloc, 64, 65, nil, 0)
+	expect(err == .Invalid_Argument)
+}
+
 //
 // Main
 //
@@ -871,11 +962,13 @@ main :: proc() {
 	opt: Options
 	flags.parse_or_exit(&opt, os.args)
 
-	file_logger := log.create_file_logger(f=nil, lowest=.Debug, opt={
+	// A nil file makes the file logger discard everything, which hid all of the
+	// benchmark results; the console logger writes them to stdout.
+	console_logger := log.create_console_logger(lowest=.Debug, opt={
 		.Level, .Terminal_Color, .Line, .Procedure,
 	})
-	defer log.destroy_file_logger(file_logger)
-	context.logger = file_logger
+	defer log.destroy_console_logger(console_logger)
+	context.logger = console_logger
 
 	if !runtime.ODIN_VIRTUAL_MEMORY_SUPPORTED {
 		log.info("Virtual memory is not supported on this platform.")
@@ -966,12 +1059,16 @@ main :: proc() {
 
 			test_orphaned_segment_with_remote_frees()
 
+			test_thread_churn_reuses_segments()
+
 			// Reset the heap, removing any of the dirty slabs before the next tests.
 			runtime.compact_local_heap()
 		}
 
 		if opt.serial_tests {
 			log.info("--- Single-threaded tests ---")
+
+			test_hostile_requests()
 
 			{
 				N :: runtime.ODIN_HEAP_MAX_BIN_SIZE

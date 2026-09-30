@@ -13,7 +13,7 @@ compact_local_heap :: proc "contextless" () {
 		return
 	}
 
-	heap_merge_remote_free_list()
+	heap_merge_remote_frees()
 
 	for segment := local_heap.segments; segment != nil; /**/ {
 		next := segment.next_segment
@@ -26,11 +26,9 @@ compact_local_heap :: proc "contextless" () {
 			slab := &segment.slabs[i]
 			if slab.bin_size > 0 && slab.free_bins == slab.max_bins {
 				free_slabs += 1
-				heap_free_slab(segment, slab)
-				if free_slabs == max_slabs {
-					// We must break now, as the segment's memory could have
-					// been returned to the operating system and we may
-					// continue iterating over invalid memory.
+				if heap_free_slab(segment, slab) {
+					// The segment's memory has been returned to the operating
+					// system and we may continue iterating over invalid memory.
 					break
 				}
 			}
@@ -54,7 +52,8 @@ heap_release_empty_orphans :: proc "contextless" () {
 	segment: ^Heap_Segment
 
 	// First, take control of the linked list by replacing it with a nil
-	// pointer and a zero count.
+	// pointer and a zero count. The chain itself is left alone, so that the walk
+	// below reaches every Segment which was on it.
 	old_head := transmute(Tagged_Pointer)intrinsics.atomic_load_explicit(cast(^u64)&heap_orphanage.empty, .Relaxed)
 	for {
 		count         := old_head.pointer & ODIN_HEAP_ORPHANAGE_COUNT_BITS
@@ -73,7 +72,6 @@ heap_release_empty_orphans :: proc "contextless" () {
 
 		old_head_, swapped := intrinsics.atomic_compare_exchange_weak_explicit(cast(^u64)&heap_orphanage.empty, transmute(u64)old_head, transmute(u64)new_head, .Acq_Rel, .Relaxed)
 		if swapped {
-			intrinsics.atomic_store_explicit(&segment.next_segment, nil, .Release)
 			break
 		}
 		old_head = transmute(Tagged_Pointer)old_head_
