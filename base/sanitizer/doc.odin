@@ -33,6 +33,10 @@ The thread sanitizer is a runtime data race detector. It can be used to detect i
 are concurrently writing and accessing a memory location without proper syncronisation.
 For more information about the thread sanitizer see: https://clang.llvm.org/docs/ThreadSanitizer.html
 
+Procedures can be made exempt from tsan when marked up with @(no_sanitize_thread).
+Custom synchronization and allocators can describe hand-offs tsan cannot otherwise
+see with `thread_release` and `thread_acquire`.
+
 */
 package sanitizer
 

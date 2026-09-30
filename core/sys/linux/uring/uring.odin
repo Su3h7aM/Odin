@@ -3,6 +3,7 @@ package uring
 import "core:math"
 import "core:sync"
 import "core:sys/linux"
+import "base:sanitizer"
 
 DEFAULT_THREAD_IDLE_MS :: 1000
 DEFAULT_ENTRIES        :: 32
@@ -239,10 +240,17 @@ submission_queue_make :: proc(fd: linux.Fd, params: ^linux.IO_Uring_Params) -> (
 	// PERF: .POPULATE commits all pages right away, is that desired?
 
 	cqe_map := cast([^]byte)(linux.mmap(0, uint(size), {.READ, .WRITE}, {.SHARED, .POPULATE}, fd, linux.IORING_OFF_SQ_RING) or_return)
+	// Acquire before the first access below: raw syscalls bypass tsan's
+	// mmap interceptor, so recycled ring pages still attribute to whichever
+	// queue last owned the address. Paired with the release in
+	// `submission_queue_destroy`. (The error-path unmap has no release;
+	// absence of an edge is the status quo, not an error.)
+	sanitizer.thread_acquire(cqe_map)
 	defer if err != nil { linux.munmap(cqe_map, uint(size)) }
 
 	size_sqes := params.sq_entries * size_of(linux.IO_Uring_SQE)
 	sqe_map   := cast([^]byte)(linux.mmap(0, uint(size_sqes), {.READ, .WRITE}, {.SHARED, .POPULATE}, fd, linux.IORING_OFF_SQES) or_return)
+	sanitizer.thread_acquire(sqe_map)
 
 	array := cast([^]u32)cqe_map[params.sq_off.array:]
 	sqes  := cast([^]linux.IO_Uring_SQE)sqe_map
@@ -261,6 +269,10 @@ submission_queue_make :: proc(fd: linux.Fd, params: ^linux.IO_Uring_Params) -> (
 }
 
 submission_queue_destroy :: proc(sq: ^Submission_Queue) -> (err: linux.Errno) {
+	// Publish before the mappings go back, paired with the acquire in
+	// `submission_queue_make`.
+	sanitizer.thread_release(raw_data(sq.mmap))
+	sanitizer.thread_release(raw_data(sq.mmap_sqes))
 	err   = linux.munmap(raw_data(sq.mmap), uint(len(sq.mmap)))
 	err2 := linux.munmap(raw_data(sq.mmap_sqes), uint(len(sq.mmap_sqes)))
 	if err == nil { err = err2 }
