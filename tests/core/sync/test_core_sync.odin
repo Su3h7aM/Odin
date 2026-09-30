@@ -129,6 +129,38 @@ test_rw_mutex :: proc(t: ^testing.T) {
 	testing.expect_value(t, data.number2, THREADS)
 }
 
+// A thread which holds an Atomic_Recursive_Mutex can take it again with
+// try_lock, each level needs its own unlock, and the lock is free afterwards.
+@test
+test_atomic_recursive_mutex_try_lock :: proc(t: ^testing.T) {
+	testing.set_fail_timeout(t, FAIL_TIME)
+
+	m: sync.Atomic_Recursive_Mutex
+
+	testing.expect(t, sync.atomic_recursive_mutex_try_lock(&m), "first try_lock should succeed")
+	testing.expect(t, sync.atomic_recursive_mutex_try_lock(&m), "try_lock by the owner should succeed")
+	sync.atomic_recursive_mutex_lock(&m)
+	testing.expect_value(t, m.recursion, 3)
+
+	sync.atomic_recursive_mutex_unlock(&m)
+	sync.atomic_recursive_mutex_unlock(&m)
+
+	// One level is still held, so another thread must not get the lock.
+	th := thread.create_and_start_with_data(&m, proc(data: rawptr) {
+		m := cast(^sync.Atomic_Recursive_Mutex)data
+		if sync.atomic_recursive_mutex_try_lock(m) {
+			sync.atomic_recursive_mutex_unlock(m)
+			panic_contextless("another thread took a held Atomic_Recursive_Mutex")
+		}
+	})
+	wait_for([]^thread.Thread{ th })
+
+	sync.atomic_recursive_mutex_unlock(&m)
+	testing.expect_value(t, m.recursion, 0)
+	testing.expect(t, sync.atomic_recursive_mutex_try_lock(&m), "the lock should be free after the last unlock")
+	sync.atomic_recursive_mutex_unlock(&m)
+}
+
 @test
 test_recursive_mutex :: proc(t: ^testing.T) {
 	testing.set_fail_timeout(t, FAIL_TIME)
