@@ -3,6 +3,8 @@ package sanitizer
 
 Address_Death_Callback :: #type proc "c" (pc: rawptr, bp: rawptr, sp: rawptr, addr: rawptr, is_write: i32, access_size: uint)
 
+Address_Error_Report_Callback :: #type proc "c" (report: cstring)
+
 @(private="file")
 ASAN_ENABLED :: .Address in ODIN_SANITIZER_FLAGS
 
@@ -32,6 +34,9 @@ foreign {
 	__asan_addr_is_in_fake_stack     :: proc(fake_stack: rawptr, addr: rawptr, beg: ^rawptr, end: ^rawptr) -> rawptr ---
 	__asan_handle_no_return          :: proc() ---
 	__asan_update_allocation_context :: proc(addr: rawptr) -> i32 ---
+	__asan_set_error_report_callback :: proc(callback: Address_Error_Report_Callback) ---
+	__asan_suppress_fake_stack       :: proc() ---
+	__asan_unsuppress_fake_stack     :: proc() ---
 }
 
 Address_Access_Type :: enum {
@@ -208,6 +213,53 @@ When asan is not enabled this procedure does nothing.
 address_set_death_callback :: proc "contextless" (callback: Address_Death_Callback) {
 	when ASAN_ENABLED {
 		__sanitizer_set_death_callback(callback)
+	}
+}
+
+/*
+Registers a callback that asan runs during error reporting, with the text of the report.
+
+The callback receives the report as a C string, so it can log the report before the
+process terminates. It is strictly more informative than the death callback, which
+receives the registers and the faulting address instead. Passing `nil` unregisters
+the callback.
+
+When asan is not enabled this procedure does nothing.
+*/
+@(no_sanitize_address)
+address_set_error_report_callback :: proc "contextless" (callback: Address_Error_Report_Callback) {
+	when ASAN_ENABLED {
+		__asan_set_error_report_callback(callback)
+	}
+}
+
+/*
+Stops asan from allocating fake stack frames for the calling thread.
+
+Use it in a thread that is about to hand off or reuse its stack, where asan's
+fake stack frames would otherwise be attributed to the wrong frame. Every call
+must be balanced by `address_unsuppress_fake_stack`.
+
+When asan is not enabled this procedure does nothing.
+*/
+@(no_sanitize_address)
+address_suppress_fake_stack :: proc "contextless" () {
+	when ASAN_ENABLED {
+		__asan_suppress_fake_stack()
+	}
+}
+
+/*
+Resumes asan's allocation of fake stack frames for the calling thread.
+
+Pairs with a preceding `address_suppress_fake_stack`.
+
+When asan is not enabled this procedure does nothing.
+*/
+@(no_sanitize_address)
+address_unsuppress_fake_stack :: proc "contextless" () {
+	when ASAN_ENABLED {
+		__asan_unsuppress_fake_stack()
 	}
 }
 

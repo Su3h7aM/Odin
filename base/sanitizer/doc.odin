@@ -37,6 +37,19 @@ Procedures can be made exempt from tsan when marked up with @(no_sanitize_thread
 Custom synchronization and allocators can describe hand-offs tsan cannot otherwise
 see with `thread_release` and `thread_acquire`.
 
+## Groups
+
+Beyond the hand-off pair, each sanitizer contributes a group of annotations. The
+thread group adds custom mutex annotations (`thread_mutex_create` through
+`thread_mutex_post_unlock`) with `Thread_Mutex_Flags`, the bulk access pair
+`thread_read_range`/`thread_write_range`, and `thread_ignore_begin`/`thread_ignore_end`
+for work a thread owns privately. The memory group adds the poison side of msan
+(`memory_poison`), the C string and initialized-range helpers
+(`memory_unpoison_string`, `memory_check_initialized`). The address group adds
+`address_set_error_report_callback` and the fake stack pair. The common group adds
+`print_stack_trace`, `set_report_path`, and the contiguous container annotations
+`container_annotate`/`container_verify`, which are asan-only.
+
 */
 package sanitizer
 
