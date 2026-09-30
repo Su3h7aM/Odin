@@ -5,6 +5,7 @@ import "base:runtime"
 import "core:io"
 import "core:time"
 import "core:sync"
+import "core:strings"
 import "core:sys/linux"
 import "core:sys/posix"
 
@@ -91,18 +92,28 @@ _open :: proc(name: string, flags: File_Flags, perm: Permissions) -> (f: ^File, 
 		return nil, _get_platform_error(errno)
 	}
 
-	return _new_file(uintptr(fd), name, file_allocator())
+	f, err = _new_file(uintptr(fd), name, file_allocator())
+	if err != nil {
+		linux.close(fd)
+	}
+	return
 }
 
-_new_file :: proc(fd: uintptr, _: string, allocator: runtime.Allocator) -> (f: ^File, err: Error) {
+_new_file :: proc(fd: uintptr, name: string, allocator: runtime.Allocator) -> (f: ^File, err: Error) {
 	impl := new(File_Impl, allocator) or_return
-	defer if err != nil {
-		free(impl, allocator)
-	}
 	impl.file.impl = impl
 	impl.fd = linux.Fd(fd)
 	impl.allocator = allocator
-	impl.name = _get_full_path(impl.fd, impl.allocator) or_return
+	// The name is only informational, so a system without /proc, such as a
+	// chroot, falls back to the name passed to `_new_file`.
+	impl.name, err = _get_full_path(impl.fd, impl.allocator)
+	if err != nil || impl.name == "" {
+		impl.name, err = strings.clone(name, impl.allocator)
+		if err != nil {
+			free(impl, allocator)
+			return nil, err
+		}
+	}
 	impl.file.stream = {
 		data = impl,
 		procedure = _file_stream_proc,
