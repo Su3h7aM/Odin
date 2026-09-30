@@ -1270,30 +1270,28 @@ sendfile_callback :: proc(op: ^Operation, res: i32) -> bool {
 
 	if op.sendfile.err != nil {
 		debug("sendfile error")
-
-		if op.sendfile._impl.pipe > 0 {
-			close(op.sendfile._impl.pipe)
-		}
-
 		splice_op := op.sendfile._impl.splice
 		if splice_op != nil {
 			assert(splice_op.type == ._Splice)
 			splice_op._splice.sendfile = nil
 			_remove(splice_op)
 		}
-
-		return true
+	} else {
+		op.sendfile.sent += int(res)
+		if op.sendfile.sent < op.sendfile._impl.len {
+			debug("sendfile not completely done yet")
+			sendfile_exec(op)
+			if op.sendfile.progress_updates { op.cb(op) }
+			return false
+		}
+		debug("sendfile completely done")
 	}
 
-	op.sendfile.sent += int(res)
-	if op.sendfile.sent < op.sendfile._impl.len {
-		debug("sendfile not completely done yet")
-		sendfile_exec(op)
-		if op.sendfile.progress_updates { op.cb(op) }
-		return false
+	// The pipe's write end is closed by the splice helper, this is the read end.
+	// A value of 0 means no pipe was created.
+	if op.sendfile._impl.pipe > 0 {
+		close(op.sendfile._impl.pipe)
 	}
-
-	debug("sendfile completely done")
 	return true
 }
 
