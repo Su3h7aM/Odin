@@ -139,6 +139,13 @@ jobs:
         run: ./odin run examples/demo
       - name: Odin run -debug
         run: ./odin run examples/demo -debug
+      - name: No-CRT smoke test (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          export ODIN_ROOT="$(pwd)"
+          ./odin build tests/no_crt -out:/tmp/nocrt-smoke -no-crt -no-thread-local -default-to-panic-allocator
+          test "$(/tmp/nocrt-smoke)" = "no-crt ok"
+          ldd /tmp/nocrt-smoke 2>&1 | grep -q "statically linked"
       - name: Odin check examples/all
         run: ./odin check examples/all -vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do
       - name: Odin check examples/all/sdl3

@@ -181,9 +181,11 @@ _is_tty :: proc "contextless" (f: ^File) -> bool {
 	}
 	impl := (^File_Impl)(f.impl)
 
-	// TODO: Replace `posix.isatty` with `tcgetattr(fd, &termios) == 0`
-	is_tty := posix.isatty(posix.FD(impl.fd))
-	return bool(is_tty)
+	// Raw TCGETS probe, cf. `isatty(3)`: the kernel copies out the terminal
+	// attributes on success and fails with ENOTTY otherwise. No libc call,
+	// so this backend links nothing from it.
+	termios: posix.termios
+	return linux.ioctl(impl.fd, linux.TCGETS, uintptr(rawptr(&termios))) == 0
 }
 
 _name :: proc(f: ^File) -> string {
