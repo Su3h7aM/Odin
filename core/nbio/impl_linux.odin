@@ -1294,6 +1294,10 @@ sendfile_callback :: proc(op: ^Operation, res: i32) -> bool {
 	}
 
 	debug("sendfile completely done")
+	// The pipe's write end is closed by the splice helper, this is the read end.
+	if op.sendfile._impl.pipe > 0 {
+		close(op.sendfile._impl.pipe)
+	}
 	return true
 }
 
