@@ -692,6 +692,51 @@ test_park_with_timeout :: proc(t: ^testing.T) {
 	sync.park_with_timeout(&car, SLEEP_TIME)
 }
 
+// An `unpark` which lands while the owner waits must end the wait, and both the
+// woken and the timed out Parker must be reusable afterwards.
+@test
+test_park_with_timeout_unpark :: proc(t: ^testing.T) {
+	testing.set_fail_timeout(t, FAIL_TIME)
+
+	PARKER_EMPTY :: 0
+
+	car: sync.Parker
+
+	// A timeout leaves the Parker empty.
+	sync.park_with_timeout(&car, SLEEP_TIME)
+	testing.expect_value(t, car.state, PARKER_EMPTY)
+
+	// A token which is already there is consumed without waiting.
+	sync.unpark(&car)
+	sync.park_with_timeout(&car, FAIL_TIME)
+	testing.expect_value(t, car.state, PARKER_EMPTY)
+
+	// A futex wake without an unpark is spurious and must not end the wait.
+	spurious_th := thread.create_and_start_with_data(&car, proc(data: rawptr) {
+		car := cast(^sync.Parker)data
+		time.sleep(SLEEP_TIME)
+		sync.futex_signal(&car.state)
+	})
+	spurious_start := time.tick_now()
+	sync.park_with_timeout(&car, 20 * time.Millisecond)
+	testing.expect(t, time.tick_since(spurious_start) >= 10 * time.Millisecond, "spurious wake ended park_with_timeout early")
+	wait_for([]^thread.Thread{ spurious_th })
+	testing.expect_value(t, car.state, PARKER_EMPTY)
+
+	// An unpark while waiting ends the wait long before the timeout.
+	th := thread.create_and_start_with_data(&car, proc(data: rawptr) {
+		time.sleep(SLEEP_TIME)
+		sync.unpark(cast(^sync.Parker)data)
+	})
+
+	start := time.tick_now()
+	sync.park_with_timeout(&car, 10 * time.Second)
+	testing.expect(t, time.tick_since(start) < FAIL_TIME / 2, "park_with_timeout did not return after unpark")
+
+	wait_for([]^thread.Thread{ th })
+	testing.expect_value(t, car.state, PARKER_EMPTY)
+}
+
 @test
 test_one_shot_event :: proc(t: ^testing.T) {
 	testing.set_fail_timeout(t, FAIL_TIME)

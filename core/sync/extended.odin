@@ -698,21 +698,28 @@ the Parker.
 @(synchronizes=.Acquire)
 park_with_timeout :: proc "contextless" (p: ^Parker, duration: time.Duration) {
 	start_tick := time.tick_now()
-	remaining_duration := duration
 	if atomic_sub_explicit(&p.state, 1, .Acquire) == PARKER_NOTIFIED {
 		return
 	}
 	for {
-		if !futex_wait_with_timeout(&p.state, PARKER_PARKED, remaining_duration) {
+		remaining := duration - time.tick_diff(start_tick, time.tick_now())
+		if remaining <= 0 {
+			old, ok := atomic_compare_exchange_strong_explicit((^u32)(&p.state), PARKER_PARKED, PARKER_EMPTY, .Acquire, .Relaxed)
+			if ok {
+				return
+			}
+			if old == PARKER_NOTIFIED {
+				atomic_compare_exchange_strong_explicit((^u32)(&p.state), PARKER_NOTIFIED, PARKER_EMPTY, .Acquire, .Relaxed)
+				return
+			}
+			continue
+		}
+
+		_ = futex_wait_with_timeout(&p.state, PARKER_PARKED, remaining)
+		if atomic_load_explicit(&p.state, .Acquire) == PARKER_NOTIFIED {
+			atomic_compare_exchange_strong_explicit((^u32)(&p.state), PARKER_NOTIFIED, PARKER_EMPTY, .Acquire, .Relaxed)
 			return
 		}
-		old, ok := atomic_compare_exchange_weak_explicit((^u32)(&p.state), PARKER_PARKED, PARKER_EMPTY, .Acquire, .Relaxed)
-		if ok || old == PARKER_PARKED {
-			return
-		}
-		end_tick := time.tick_now()
-		remaining_duration -= time.tick_diff(start_tick, end_tick)
-		start_tick = end_tick
 	}
 }
 
