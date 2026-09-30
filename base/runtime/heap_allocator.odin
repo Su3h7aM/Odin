@@ -64,7 +64,7 @@ heap_allocator_proc :: proc(
 		}
 		return transmute([]byte)Raw_Slice{ data = ptr, len = size }, nil
 	case .Free:
-		heap_free(old_memory)
+		heap_free(old_memory, old_size)
 	case .Free_All:
 		return nil, .Mode_Not_Implemented
 	case .Query_Features:
