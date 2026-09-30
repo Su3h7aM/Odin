@@ -676,23 +676,15 @@ available, or until the timeout has expired, whatever happens first.
 the Parker.
 */
 park_with_timeout :: proc "contextless" (p: ^Parker, duration: time.Duration) {
-	start_tick := time.tick_now()
-	remaining_duration := duration
 	if atomic_sub_explicit(&p.state, 1, .Acquire) == PARKER_NOTIFIED {
 		return
 	}
-	for {
-		if !futex_wait_with_timeout(&p.state, PARKER_PARKED, remaining_duration) {
-			return
-		}
-		old, ok := atomic_compare_exchange_weak_explicit((^u32)(&p.state), PARKER_PARKED, PARKER_EMPTY, .Acquire, .Relaxed)
-		if ok || old == PARKER_PARKED {
-			return
-		}
-		end_tick := time.tick_now()
-		remaining_duration -= time.tick_diff(start_tick, end_tick)
-		start_tick = end_tick
-	}
+	_ = futex_wait_with_timeout(&p.state, PARKER_PARKED, duration)
+	// However the wait ended, whether by `unpark`, the timeout, or a spurious
+	// wakeup, this thread is no longer parked. Reset the state to empty, which
+	// also consumes a token that `unpark` may have left. A plain store would miss
+	// a token that arrives between the wait and the reset.
+	atomic_exchange_explicit((^u32)(&p.state), PARKER_EMPTY, .Acquire)
 }
 
 /*
