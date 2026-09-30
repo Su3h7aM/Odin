@@ -668,7 +668,7 @@ accept_exec :: proc(op: ^Operation) {
 		linux.Fd(op.accept.socket),
 		&op.accept._impl.sockaddr,
 		&op.accept._impl.sockaddr_len,
-		{},
+		{.CLOEXEC},
 	))
 	link_timeout(op, op.accept.expires)
 }
