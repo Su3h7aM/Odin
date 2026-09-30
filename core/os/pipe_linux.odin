@@ -10,8 +10,20 @@ _pipe :: proc() -> (r, w: ^File, err: Error) {
 		return nil, nil,_get_platform_error(errno)
 	}
 
-	r = _new_file(uintptr(fds[0]), "", file_allocator()) or_return
-	w = _new_file(uintptr(fds[1]), "", file_allocator()) or_return
+	// `_new_file` does not take the descriptor on failure, so this closes what
+	// it was given, and the read end if the write end is the one that failed.
+	r, err = _new_file(uintptr(fds[0]), "", file_allocator())
+	if err != nil {
+		linux.close(fds[0])
+		linux.close(fds[1])
+		return nil, nil, err
+	}
+	w, err = _new_file(uintptr(fds[1]), "", file_allocator())
+	if err != nil {
+		close(r)
+		linux.close(fds[1])
+		return nil, nil, err
+	}
 
 	return
 }

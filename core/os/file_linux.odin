@@ -91,7 +91,11 @@ _open :: proc(name: string, flags: File_Flags, perm: Permissions) -> (f: ^File, 
 		return nil, _get_platform_error(errno)
 	}
 
-	return _new_file(uintptr(fd), name, file_allocator())
+	f, err = _new_file(uintptr(fd), name, file_allocator())
+	if err != nil {
+		linux.close(fd)
+	}
+	return
 }
 
 _new_file :: proc(fd: uintptr, _: string, allocator: runtime.Allocator) -> (f: ^File, err: Error) {
@@ -102,7 +106,9 @@ _new_file :: proc(fd: uintptr, _: string, allocator: runtime.Allocator) -> (f: ^
 	impl.file.impl = impl
 	impl.fd = linux.Fd(fd)
 	impl.allocator = allocator
-	impl.name = _get_full_path(impl.fd, impl.allocator) or_return
+	// The name is only informational, so a system without /proc, such as a
+	// chroot, gets an empty one instead of failing to open any file at all.
+	impl.name, _ = _get_full_path(impl.fd, impl.allocator)
 	impl.file.stream = {
 		data = impl,
 		procedure = _file_stream_proc,
