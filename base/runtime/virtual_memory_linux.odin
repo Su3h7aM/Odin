@@ -10,45 +10,56 @@ when ODIN_ARCH == .amd64 {
 	SYS_read   :: uintptr(0)
 	SYS_close  :: uintptr(3)
 
-	SYS_mmap   :: uintptr(9)
-	SYS_munmap :: uintptr(11)
-	SYS_mremap :: uintptr(25)
+	SYS_mmap    :: uintptr(9)
+	SYS_munmap  :: uintptr(11)
+	SYS_mprotect :: uintptr(10)
+	SYS_mremap  :: uintptr(25)
+	SYS_madvise :: uintptr(28)
 } else when ODIN_ARCH == .arm32 {
 	SYS_open   :: uintptr(5)
 	SYS_read   :: uintptr(3)
 	SYS_close  :: uintptr(6)
 
-	SYS_mmap   :: uintptr(90)
-	SYS_munmap :: uintptr(91)
-	SYS_mremap :: uintptr(163)
+	SYS_mmap    :: uintptr(90)
+	SYS_munmap  :: uintptr(91)
+	SYS_mprotect :: uintptr(125)
+	SYS_mremap  :: uintptr(163)
+	SYS_madvise :: uintptr(220)
 } else when ODIN_ARCH == .arm64 {
 	SYS_openat :: uintptr(56)
 	SYS_read   :: uintptr(63)
 	SYS_close  :: uintptr(57)
 
-	SYS_mmap   :: uintptr(222)
-	SYS_munmap :: uintptr(215)
-	SYS_mremap :: uintptr(216)
+	SYS_mmap    :: uintptr(222)
+	SYS_munmap  :: uintptr(215)
+	SYS_mprotect :: uintptr(226)
+	SYS_mremap  :: uintptr(216)
+	SYS_madvise :: uintptr(233)
 } else when ODIN_ARCH == .i386 {
 	SYS_open   :: uintptr(5)
 	SYS_read   :: uintptr(3)
 	SYS_close  :: uintptr(6)
 
-	SYS_mmap   :: uintptr(90)
-	SYS_munmap :: uintptr(91)
-	SYS_mremap :: uintptr(163)
+	SYS_mmap    :: uintptr(90)
+	SYS_munmap  :: uintptr(91)
+	SYS_mprotect :: uintptr(125)
+	SYS_mremap  :: uintptr(163)
+	SYS_madvise :: uintptr(219)
 } else when ODIN_ARCH == .riscv64 {
 	SYS_openat :: uintptr(56)
 	SYS_read   :: uintptr(63)
 	SYS_close  :: uintptr(57)
 
-	SYS_mmap   :: uintptr(222)
-	SYS_munmap :: uintptr(215)
-	SYS_mremap :: uintptr(216)
+	SYS_mmap    :: uintptr(222)
+	SYS_munmap  :: uintptr(215)
+	SYS_mprotect :: uintptr(226)
+	SYS_mremap  :: uintptr(216)
+	SYS_madvise :: uintptr(233)
 } else {
 	#panic("Syscall numbers related to virtual memory are missing for this Linux architecture.")
 }
 
+PROT_NONE      :: 0x00
 PROT_READ      :: 0x01
 PROT_WRITE     :: 0x02
 
@@ -57,7 +68,94 @@ MAP_ANONYMOUS  :: 0x20
 
 MREMAP_MAYMOVE :: 0x01
 
-ENOMEM         :: ~uintptr(11)
+MADV_DONTNEED :: 0x04
+
+/*
+ThreadSanitizer keeps a shadow of every mapping a program has, and it learns
+about mappings from its own interceptors of the C library's memory procedures.
+A system call goes straight past those interceptors, which leaves the shadow of
+a range describing memory that has since been given back and handed to another
+thread; there is no other way to tell it what happened. A build which asks for
+the sanitizer therefore reaches the operating system through the C library.
+Everything else uses a system call directly, which is both faster and free of
+the C library.
+*/
+when .Thread in ODIN_SANITIZER_FLAGS {
+	foreign {
+		@(link_name="mmap")    c_mmap    :: proc "c" (addr: rawptr, length: uint, prot, flags, fd: i32, offset: i64) -> rawptr ---
+		@(link_name="munmap")  c_munmap  :: proc "c" (addr: rawptr, length: uint) -> i32 ---
+		@(link_name="mprotect") c_mprotect :: proc "c" (addr: rawptr, length: uint, prot: i32) -> i32 ---
+		@(link_name="mremap")  c_mremap  :: proc "c" (addr: rawptr, old_size, new_size: uint, flags: i32) -> rawptr ---
+		@(link_name="madvise") c_madvise :: proc "c" (addr: rawptr, length: uint, advice: i32) -> i32 ---
+	}
+}
+
+/*
+Map `size` bytes of zeroed memory, readable and writable.
+*/
+@(private)
+vm_map :: proc "contextless" (size: int) -> (memory: rawptr, ok: bool) {
+	when .Thread in ODIN_SANITIZER_FLAGS {
+		result := c_mmap(nil, uint(size), PROT_READ|PROT_WRITE, i32(MAP_ANONYMOUS|MAP_PRIVATE), -1, 0)
+		ok = result != nil && uintptr(result) != ~uintptr(0)
+		memory = result
+	} else {
+		result := intrinsics.syscall(SYS_mmap, 0, uintptr(size), PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, ~uintptr(0), 0)
+		ok = int(result) >= 0
+		memory = rawptr(result)
+	}
+	return
+}
+
+/*
+Return the memory to the operating system.
+*/
+@(private)
+vm_unmap :: proc "contextless" (memory: rawptr, size: int) {
+	when .Thread in ODIN_SANITIZER_FLAGS {
+		c_munmap(memory, uint(size))
+	} else {
+		intrinsics.syscall(SYS_munmap, uintptr(memory), uintptr(size))
+	}
+}
+
+/*
+Move or resize memory previously returned by `vm_map`.
+*/
+@(private)
+vm_remap :: proc "contextless" (memory: rawptr, old_size, new_size: int, may_move: bool) -> (moved: rawptr, ok: bool) {
+	when .Thread in ODIN_SANITIZER_FLAGS {
+		flags := i32(0)
+		if may_move {
+			flags = MREMAP_MAYMOVE
+		}
+		result := c_mremap(memory, uint(old_size), uint(new_size), flags)
+		ok = result != nil && uintptr(result) != ~uintptr(0)
+		moved = result
+	} else {
+		flags := uintptr(0)
+		if may_move {
+			flags = MREMAP_MAYMOVE
+		}
+		result := intrinsics.syscall(SYS_mremap, uintptr(memory), uintptr(old_size), uintptr(new_size), flags)
+		ok = int(result) >= 0
+		moved = rawptr(result)
+	}
+	return
+}
+
+/*
+Give the pages backing `memory` back to the operating system, which reads as
+zero the next time it is used.
+*/
+@(private)
+vm_release_pages :: proc "contextless" (memory: rawptr, size: int) -> (released: bool) {
+	when .Thread in ODIN_SANITIZER_FLAGS {
+		return c_madvise(memory, uint(size), MADV_DONTNEED) == 0
+	} else {
+		return int(intrinsics.syscall(SYS_madvise, uintptr(memory), uintptr(size), MADV_DONTNEED)) == 0
+	}
+}
 
 _init_virtual_memory :: proc "contextless" () {
 	page_size = _get_page_size()
@@ -159,27 +257,27 @@ _get_superpage_size :: proc "contextless" () -> int {
 }
 
 _allocate_virtual_memory :: proc "contextless" (size: int) -> rawptr {
-	result := intrinsics.syscall(SYS_mmap, 0, uintptr(size), PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, ~uintptr(0), 0)
-	if int(result) < 0 {
+	result, ok := vm_map(size)
+	if !ok {
 		return nil
 	}
-	return rawptr(result)
+	return result
 }
 
 _allocate_virtual_memory_superpage :: proc "contextless" () -> rawptr {
 	// This depends on Transparent HugePage Support being enabled.
-	result := intrinsics.syscall(SYS_mmap, 0, uintptr(superpage_size), PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, ~uintptr(0), 0)
-	if int(result) < 0 {
+	result, ok := vm_map(superpage_size)
+	if !ok {
 		return nil
 	}
 	if uintptr(result) % uintptr(superpage_size) != 0 {
 		// If THP support is not enabled, we may receive an address aligned to a
 		// page boundary instead, in which case, we must manually align a new
 		// address.
-		_free_virtual_memory(rawptr(result), superpage_size)
+		_free_virtual_memory(result, superpage_size)
 		return _allocate_virtual_memory_aligned(superpage_size, superpage_size)
 	}
-	return rawptr(result)
+	return result
 }
 
 _allocate_virtual_memory_aligned :: proc "contextless" (size: int, alignment: int) -> rawptr {
@@ -190,17 +288,18 @@ _allocate_virtual_memory_aligned :: proc "contextless" (size: int, alignment: in
 		// two is necessarily aligned to all lesser powers of two, and because
 		// mmap returns page-aligned addresses, we don't have to do anything
 		// extra here.
-		result := intrinsics.syscall(SYS_mmap, 0, uintptr(size), PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, ~uintptr(0), 0)
-		if int(result) < 0 {
+		result, ok := vm_map(size)
+		if !ok {
 			return nil
 		}
-		return rawptr(result)
+		return result
 	}
 	// We must over-allocate then adjust the address.
-	mmap_result := intrinsics.syscall(SYS_mmap, 0, uintptr(size + alignment), PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, ~uintptr(0), 0)
-	if int(mmap_result) < 0 {
+	mmap_result_raw, ok := vm_map(size + alignment)
+	if !ok {
 		return nil
 	}
+	mmap_result := uintptr(mmap_result_raw)
 	assert_contextless(mmap_result % uintptr(page_size) == 0)
 	modulo := mmap_result & uintptr(alignment-1)
 	if modulo != 0 {
@@ -219,7 +318,19 @@ _allocate_virtual_memory_aligned :: proc "contextless" (size: int, alignment: in
 		delta = delta / uintptr(page_size) * uintptr(page_size)
 		if delta > 0 {
 			// Unmap the pages we don't need.
-			intrinsics.syscall(SYS_munmap, mmap_result, delta)
+			vm_unmap(rawptr(mmap_result), int(delta))
+		}
+
+		// The pages past the end of the requested size are also given back, as
+		// they would otherwise be leaked for the lifetime of the mapping.
+		tail_pages := size / page_size * page_size
+		if size % page_size != 0 {
+			tail_pages += page_size
+		}
+		tail_start := adjusted_result + uintptr(tail_pages)
+		tail_end   := mmap_result + uintptr(size + alignment)
+		if tail_end > tail_start {
+			vm_unmap(rawptr(tail_start), int(tail_end - tail_start))
 		}
 
 		return rawptr(adjusted_result)
@@ -233,41 +344,65 @@ _allocate_virtual_memory_aligned :: proc "contextless" (size: int, alignment: in
 		}
 		length := size + alignment - start
 		if length > 0 {
-			intrinsics.syscall(SYS_munmap, mmap_result + uintptr(start), uintptr(length))
+			vm_unmap(rawptr(mmap_result + uintptr(start)), int(length))
 		}
 	}
 	return rawptr(mmap_result)
 }
 
 _free_virtual_memory :: proc "contextless" (ptr: rawptr, size: int) {
-	intrinsics.syscall(SYS_munmap, uintptr(ptr), uintptr(size))
+	vm_unmap(ptr, size)
+}
+
+_decommit_virtual_memory :: proc "contextless" (ptr: rawptr, size: int) -> (decommitted: bool) {
+	// `MADV_DONTNEED` drops the pages, and the next access to the range is
+	// served a fresh, zeroed page.
+	return vm_release_pages(ptr, size)
+}
+
+_protect_virtual_memory :: proc "contextless" (ptr: rawptr, size: int) -> (protected: bool) {
+	// A page with no access faults on any read or write, and is released along
+	// with the rest of the mapping it is in.
+	when .Thread in ODIN_SANITIZER_FLAGS {
+		return c_mprotect(ptr, uint(size), PROT_NONE) == 0
+	} else {
+		return int(intrinsics.syscall(SYS_mprotect, uintptr(ptr), uintptr(size), PROT_NONE)) == 0
+	}
+}
+
+_resize_virtual_memory_in_place :: proc "contextless" (ptr: rawptr, old_size: int, new_size: int) -> (resized: bool) {
+	// `mremap` without `MREMAP_MAYMOVE` either extends the mapping where it is
+	// or fails, which is exactly what is being asked for here.
+	moved, ok := vm_remap(ptr, old_size, new_size, false)
+	return ok && moved == ptr
 }
 
 _resize_virtual_memory :: proc "contextless" (ptr: rawptr, old_size: int, new_size: int, alignment: int) -> rawptr {
 	if alignment == 0 {
 		// The user does not care about alignment, which is the simpler case.
-		result := intrinsics.syscall(SYS_mremap, uintptr(ptr), uintptr(old_size), uintptr(new_size), MREMAP_MAYMOVE)
-		if int(result) < 0 {
+		result, ok := vm_remap(ptr, old_size, new_size, true)
+		if !ok {
 			return nil
 		}
-		return rawptr(result)
+		return result
 	} else {
-		// First, let's try to mremap without MREMAP_MAYMOVE. We might get
-		// lucky and the operating system could expand (or shrink, as the case
-		// may be) the pages in place, which means we don't have to allocate a
-		// whole new chunk of memory.
-		mremap_result := intrinsics.syscall(SYS_mremap, uintptr(ptr), uintptr(old_size), uintptr(new_size), 0)
-		if mremap_result != ENOMEM {
-			// We got lucky.
-			return rawptr(mremap_result)
+		// First, let's try to resize the memory in place. We might get lucky
+		// and the operating system could expand (or shrink, as the case may be)
+		// the pages without moving them, which means we don't have to allocate
+		// a whole new chunk of memory.
+		if result, ok := vm_remap(ptr, old_size, new_size, false); ok {
+			return result
 		}
 
-		// mremap failed to resize the memory in place, which means we must
+		// The memory could not be resized in place, which means we must
 		// allocate an entirely new aligned chunk of memory, copy the old data,
 		// and free the old pointer before returning the new one.
 		//
 		// This is costly but unavoidable with the API available to us.
 		result := _allocate_virtual_memory_aligned(new_size, alignment)
+		if result == nil {
+			return nil
+		}
 		intrinsics.mem_copy_non_overlapping(result, ptr, min(new_size, old_size))
 		_free_virtual_memory(ptr, old_size)
 		return result

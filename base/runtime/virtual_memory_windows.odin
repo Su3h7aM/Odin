@@ -146,6 +146,25 @@ _free_virtual_memory :: proc "contextless" (ptr: rawptr, size: int) {
 	VirtualFree(ptr, 0, MEM_RELEASE)
 }
 
+_decommit_virtual_memory :: proc "contextless" (ptr: rawptr, size: int) -> (decommitted: bool) {
+	// TODO: Hand the pages back with `VirtualFree(..., MEM_DECOMMIT)` and
+	// re-commit them on the next allocation. `MEM_RESET` is the only
+	// alternative that keeps them committed, and it does not promise that the
+	// range reads as zero afterwards, which the heap allocator relies on.
+	return false
+}
+
+_protect_virtual_memory :: proc "contextless" (ptr: rawptr, size: int) -> (protected: bool) {
+	// Not yet supported on this platform. The caller treats protection as a
+	// hint, so the memory simply stays accessible.
+	return false
+}
+
+_resize_virtual_memory_in_place :: proc "contextless" (ptr: rawptr, old_size: int, new_size: int) -> (resized: bool) {
+	// A Windows mapping cannot grow where it is; the caller copies instead.
+	return false
+}
+
 _resize_virtual_memory :: proc "contextless" (ptr: rawptr, old_size: int, new_size: int, alignment: int) -> rawptr {
 	// There is no system support for resizing addresses returned by VirtualAlloc.
 	// All we can do is request a new address, copy the data, and free the old.
