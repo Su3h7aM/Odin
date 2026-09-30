@@ -21,8 +21,18 @@ heap_allocator_proc :: proc(
 	old_size: int,
 	loc := #caller_location,
 ) -> ([]byte, Allocator_Error) {
-	assert(alignment <= ODIN_HEAP_MAX_ALIGNMENT, "Heap allocation alignment beyond ODIN_HEAP_MAX_ALIGNMENT bytes is not supported.", loc = loc)
 	assert(alignment >= 0, "Alignment must be greater than or equal to zero.", loc = loc)
+
+	// A negative size, a non-binary alignment, or an alignment beyond what a bin
+	// can give can never be satisfied, so fail with Invalid_Argument in every
+	// build rather than hand back a misaligned address.
+	switch mode {
+	case .Alloc, .Alloc_Non_Zeroed, .Resize, .Resize_Non_Zeroed:
+		if size < 0 || alignment > ODIN_HEAP_MAX_ALIGNMENT || (alignment != 0 && !is_power_of_two_int(alignment)) {
+			return nil, .Invalid_Argument
+		}
+	case .Free, .Free_All, .Query_Features, .Query_Info:
+	}
 	switch mode {
 	case .Alloc:
 		// All allocations are aligned to at least their size up to

@@ -59,6 +59,23 @@ verify_zeroed :: proc {
 	verify_zeroed_ptr,
 }
 
+// The heap allocator only provides binary (power-of-two) alignment, so the
+// size-derived alignments below are rounded up instead of passing values
+// like 3 that no size class can satisfy. This preserves the tests'
+// intent (an alignment at or below the request size) within the contract.
+round_alignment_up :: proc "contextless" (alignment: int) -> int {
+	a := max(alignment, 1) - 1
+	a |= a >> 1
+	a |= a >> 2
+	a |= a >> 4
+	a |= a >> 8
+	a |= a >> 16
+	when size_of(int) == 8 {
+		a |= a >> 32
+	}
+	return a + 1
+}
+
 verify_integrity_slice :: proc(bytes: []byte, seed: u64, loc := #caller_location) {
 	buf: [1]byte
 	rand.reset(seed)
@@ -161,7 +178,7 @@ test_alloc_write_free :: proc(
 
 	for o in 1..=u64(object_count) {
 		seed := u64(intrinsics.read_cycle_counter()) * o
-		alignment := min(size, runtime.ODIN_HEAP_MAX_ALIGNMENT)
+		alignment := round_alignment_up(min(size, runtime.ODIN_HEAP_MAX_ALIGNMENT))
 
 		bytes, alloc_err := allocator.procedure(allocator.data, .Alloc, size, alignment, nil, 0)
 		expect(alloc_err == nil)
@@ -241,7 +258,7 @@ test_continuous_allocation_of_size_n :: proc(count: int, max_size: int) {
 	allocator := context.allocator
 	base_seed := u64(intrinsics.read_cycle_counter())
 	for size in 0..<max_size {
-		alignment := min(size, runtime.ODIN_HEAP_MAX_ALIGNMENT)
+		alignment := round_alignment_up(min(size, runtime.ODIN_HEAP_MAX_ALIGNMENT))
 		seed := base_seed * (1+u64(size))
 
 		for i in 0..<count {
@@ -277,7 +294,7 @@ test_individual_allocation_and_free :: proc(count: int) {
 		if size > 0 && size % (runtime.ODIN_HEAP_MAX_BIN_SIZE/8) == 0 {
 			log.infof("... %i ...", size)
 		}
-		alignment := min(size, runtime.ODIN_HEAP_MAX_ALIGNMENT)
+		alignment := round_alignment_up(min(size, runtime.ODIN_HEAP_MAX_ALIGNMENT))
 
 		// Allocate and free twice to make sure that the memory is truly zeroed.
 		//
@@ -315,7 +332,7 @@ test_single_alloc_and_resize :: proc(start, target: int) {
 	allocator := context.allocator
 	base_seed := u64(intrinsics.read_cycle_counter())
 
-	alignment := min(start, runtime.ODIN_HEAP_MAX_ALIGNMENT)
+	alignment := round_alignment_up(min(start, runtime.ODIN_HEAP_MAX_ALIGNMENT))
 	seed := base_seed * (1+u64(start))
 
 	bytes, alloc_err := allocator.procedure(allocator.data, .Alloc, start, alignment, nil, 0)
@@ -609,7 +626,7 @@ test_single_alloc_and_resize_incremental :: proc(start, target: int) {
 	log.infof("Testing allocation of %i bytes, resizing by increments of one until %i is reached.", start, target)
 	allocator := context.allocator
 
-	alignment := min(start, runtime.ODIN_HEAP_MAX_ALIGNMENT)
+	alignment := round_alignment_up(min(start, runtime.ODIN_HEAP_MAX_ALIGNMENT))
 	seed := u64(intrinsics.read_cycle_counter()) * (1+u64(start))
 
 	bytes, alloc_err := allocator.procedure(allocator.data, .Alloc, start, alignment, nil, 0)
