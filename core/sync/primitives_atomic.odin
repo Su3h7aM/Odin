@@ -292,7 +292,9 @@ atomic_recursive_mutex_unlock :: proc "contextless" (m: ^Atomic_Recursive_Mutex)
 atomic_recursive_mutex_try_lock :: proc "contextless" (m: ^Atomic_Recursive_Mutex) -> bool {
 	tid := current_thread_id()
 	if m.owner == tid {
-		return mutex_try_lock(&m.mutex)
+		// This thread already holds the lock, so taking it again always succeeds.
+		m.recursion += 1
+		return true
 	}
 	if !mutex_try_lock(&m.mutex) {
 		return false
