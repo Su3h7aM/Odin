@@ -139,6 +139,33 @@ jobs:
         run: ./odin run examples/demo
       - name: Odin run -debug
         run: ./odin run examples/demo -debug
+      - name: No-CRT smoke test (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          mkdir -p /tmp/nocrt-smoke && cat > /tmp/nocrt-smoke/main.odin <<'EOF'
+          package nocrt_smoke
+
+          import "base:runtime"
+          import "core:os"
+          import "core:sys/linux"
+
+          // Exercises core:os (env roundtrip through the -no-crt path) with
+          // zero C runtime. Fails to link if anything pulls in libc.
+          main :: proc() {
+          	os.set_env("ODIN_CI_SMOKE", "a")
+          	os.set_env("ODIN_CI_SMOKE", "a longer value that resizes the entry")
+          	v, ok := os.lookup_env("ODIN_CI_SMOKE", runtime.heap_allocator())
+          	assert(ok && v == "a longer value that resizes the entry")
+          	os.unset_env("ODIN_CI_SMOKE")
+
+          	msg := "no-crt ok\n"
+          	linux.write(linux.STDOUT_FILENO, transmute([]byte)msg)
+          }
+          EOF
+          export ODIN_ROOT="$(pwd)"
+          ./odin build /tmp/nocrt-smoke -out:/tmp/nocrt-smoke/pure -no-crt -no-thread-local -default-to-panic-allocator
+          test "$(/tmp/nocrt-smoke/pure)" = "no-crt ok"
+          ldd /tmp/nocrt-smoke/pure 2>&1 | grep -q "statically linked"
       - name: Odin check examples/all
         run: ./odin check examples/all -vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do
       - name: Odin check examples/all/sdl3

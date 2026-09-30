@@ -96,7 +96,8 @@ when ODIN_NO_CRT {
 				// wasn't in the environment in the first place.
 				k_addr, v_addr := _kv_addr_from_val(v_curr, key)
 				if len(v_new) > len(v_curr) {
-					k_addr = ([^]u8)(runtime.heap_resize(k_addr, kv_size))
+					old_size := len(key) + len(v_curr) + 2
+					k_addr = ([^]u8)(runtime.heap_resize(k_addr, old_size, kv_size))
 					if k_addr == nil {
 						return .Out_Of_Memory
 					}
@@ -105,7 +106,7 @@ when ODIN_NO_CRT {
 				intrinsics.mem_copy_non_overlapping(v_addr, raw_data(v_new), len(v_new))
 				v_addr[len(v_new)] = 0
 
-				append(&_env, string(k_addr[:kv_size]))
+				append(&_env, string(k_addr[:kv_size - 1]))
 				return nil
 			}
 		}

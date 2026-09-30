@@ -2,7 +2,13 @@ package libc
 
 import "core:c"
 
-#assert(!ODIN_NO_CRT, `"core:c/libc" cannot be imported when '-no-crt' is used`)
+/*
+	Importing this package under '-no-crt' is allowed so that its pure
+	declarations (types, constants) stay usable without libc. Calling any
+	procedure declared here without a C runtime fails at link time under
+	'-nostdlib', which is the actual gate: nothing here may be referenced
+	unless libc is linked.
+*/
 
 char           :: c.char // assuming -funsigned-char
 
