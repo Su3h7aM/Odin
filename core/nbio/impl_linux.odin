@@ -281,7 +281,10 @@ __tick :: proc(l: ^Event_Loop, timeout: time.Duration) -> General_Error {
 	_flush_submissions :: proc(l: ^Event_Loop, timeout: time.Duration) -> linux.Errno {
 		for {
 			ts: linux.Time_Spec
-			ts.time_nsec = uint(timeout)
+			if timeout > 0 {
+				ts.time_sec  = uint(timeout / time.Second)
+				ts.time_nsec = uint(timeout % time.Second)
+			}
 			_, err := uring.submit(&l.ring, 0 if timeout == 0 else 1, nil if timeout < 0 else &ts)
 			#partial switch err {
 			case .NONE, .ETIME:
