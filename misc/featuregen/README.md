@@ -15,6 +15,20 @@ It generates these globals (intended for `src/build_settings_microarch.cpp`:
 In order to get the default features for a microarchitecture there is a small CPP program that takes
 a target triple and microarchitecture and spits out the default features, this is then parsed by the python script.
 
+`featuregen.cpp` builds against every LLVM version Odin supports. The API it uses changed shape
+twice, so the relevant calls are guarded on `LLVM_VERSION_MAJOR`:
+
+| LLVM | `lookupTarget` | `createMCSubtargetInfo` | `SubtargetFeatureKV` key |
+| ---- | -------------- | ----------------------- | ------------------------ |
+| 17-20 | `StringRef` | `StringRef` | `Key` field |
+| 21 | `Triple` (both overloads) | `StringRef` | `Key` field |
+| 22 | `Triple` | `Triple` (both overloads) | `Key` field |
+| 23+ | `Triple` | `Triple` | `key()` accessor |
+
+The list of available microarchitectures and the list of available target features are read from
+`llc -march=<target> -mcpu=help`, which prints them for the LLVM build that `llc` belongs to. The
+`llc` used defaults to `$(llvm-config --bindir)/llc`; set `LLC` to override it.
+
 This should be ran each time we update LLVM to stay in sync.
 
 If there are minor differences (like the Odin user using LLVM 14 and this table being generated on LLVM 17) it
@@ -25,4 +39,4 @@ does not impact much at all, the only thing it will do is make LLVM print a mess
 1. Make sure the table of architectures at the top of the python script is up-to-date (the triple can be any valid triple for the architecture)
 1. `./build_featuregen.sh`
 1. `python3 featuregen.py`
-1. Copy the output into `src/build_settings.cpp`
+1. Copy the output into the matching `#if LLVM_VERSION_MAJOR >= <n>` block of `src/build_settings_microarch.cpp`
