@@ -98,7 +98,7 @@ LLVM_VERSION_MINOR="$(echo $LLVM_VERSION | awk -F. '{print $2}')"
 LLVM_VERSION_PATCH="$(echo $LLVM_VERSION | awk -F. '{print $3}')"
 
 if [ $LLVM_VERSION_MAJOR -lt $MINIMUM_LLVM_VERSION ]; then
-	error "Unsupported LLVM version $LLVM_VERSION: must be 17, 18, 19, 20, 21 or 22"
+	error "Unsupported LLVM version $LLVM_VERSION: must be 17, 18, 19, 20, 21, 22 or 23"
 fi
 
 case "$OS_NAME" in
