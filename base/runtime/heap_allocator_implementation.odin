@@ -143,6 +143,42 @@ ODIN_HEAP_MAX_BIN_SIZE :: #config(ODIN_HEAP_MAX_BIN_SIZE, 512 * Kilobyte) // [n.
 ODIN_HEAP_MAX_ALIGNMENT :: #config(ODIN_HEAP_MAX_ALIGNMENT, 64 * Byte)
 
 /*
+`ODIN_HEAP_SUPERPAGES` controls whether a Segment is given over to the operating
+system's largest pages.
+
+A superpage holds one address translation for a large amount of memory, which
+saves the processor work while that memory is in use, and brings that memory in
+for a fraction of what a page at a time costs. The price is that touching any
+part of one makes the whole thing resident.
+
+That price is only worth paying for memory the program is going to use, so a
+Segment is given large pages once the heap is already handing out that kind of
+Segment's worth of allocated bins and they are densely used. Everything else
+stays on ordinary pages and costs only what it touches.
+
+Turning this off keeps every Segment on ordinary pages.
+*/
+ODIN_HEAP_SUPERPAGES :: #config(ODIN_HEAP_SUPERPAGES, true)
+
+/*
+`ODIN_HEAP_SUPERPAGE_THRESHOLD` is how many bytes of allocated bins a heap must be
+handing out in Segments of the kind it is about to make before the new one is
+given over to the operating system's largest pages.
+
+The default of zero means two Segments' worth. One Segment's worth is not enough
+of an answer to the question the threshold is asking, which is whether this kind
+of Segment gets filled: a Segment can be entirely given over to Slabs and still
+hold little, one Segment per Bin size above 8 KiB is easy to reach with a handful
+of allocations, and a single Segment's worth of bins can therefore be evidence
+that the heap is using a lot of address space for very little. Two Segments'
+worth is past the point where that is so.
+
+A larger value makes the heap more reluctant to use large pages; a value no
+program reaches leaves them to allocations the size of a Segment or more.
+*/
+ODIN_HEAP_SUPERPAGE_THRESHOLD :: #config(ODIN_HEAP_SUPERPAGE_THRESHOLD, 0 /* bytes, 0 means two Segments */)
+
+/*
 `ODIN_HEAP_SMALL_SLAB_SIZE` controls the cut-off for Segments with Small Slabs.
 Any allocation below `ODIN_HEAP_SMALL_BIN_MAX` will be placed into Slabs of this size.
 
@@ -154,6 +190,13 @@ use the entire width of the Slab space for any allocation that rounds to 16KiB.
 ODIN_HEAP_SMALL_SLAB_SIZE :: #config(ODIN_HEAP_SMALL_SLAB_SIZE, 64 * Kilobyte)
 ODIN_HEAP_SMALL_BIN_MAX   :: #config(ODIN_HEAP_SMALL_BIN_MAX, 8 * Kilobyte) // [0..=m] inclusive range
 
+/*
+`ODIN_HEAP_PURGE_INTERVAL` controls how many frees may pass before the heap
+hands the pages of its empty Segments back. Purging on every free would fault
+them straight back in under steady churn; never purging would keep idle pages
+resident until the heap grows again.
+*/
+ODIN_HEAP_PURGE_INTERVAL :: #config(ODIN_HEAP_PURGE_INTERVAL, 1024 /* frees */)
 //
 // Constants
 //
@@ -221,6 +264,7 @@ Heap_Debug_Level :: enum {
 #assert(ODIN_HEAP_MAX_EMPTY_ORPHANED_SEGMENTS >= 0, "ODIN_HEAP_MAX_EMPTY_ORPHANED_SEGMENTS must be positive.")
 #assert(ODIN_HEAP_MAX_EMPTY_ORPHANED_SEGMENTS < ODIN_HEAP_ORPHANAGE_COUNT_BITS, "ODIN_HEAP_MAX_EMPTY_ORPHANED_SEGMENTS is too great.")
 #assert(ODIN_HEAP_MAX_ALIGNMENT & (ODIN_HEAP_MAX_ALIGNMENT-1) == 0, "ODIN_HEAP_MAX_ALIGNMENT must be a power of two.")
+#assert(ODIN_HEAP_PURGE_INTERVAL >= 0, "ODIN_HEAP_PURGE_INTERVAL must be positive.")
 
 //
 // Utility Procedures
@@ -668,6 +712,11 @@ the same size per its rank. For example, the 0th list contains all Slabs that
 can fit allocations of `ODIN_HEAP_MIN_BIN_SIZE`.
 
 
+`purge_countdown` counts down the frees which may pass before this heap hands
+the pages of its empty Segments back. It starts at zero, so the first free
+always looks.
+
+
 `current_memory` reports the amount of memory that the heap has under its control.
 
 `peak_memory` is the most amount of memory that the heap has ever held.
@@ -679,6 +728,8 @@ Heap :: struct {
 	free_slabs: [1+int(max(Heap_Slab_Class))]^Heap_Slab,
 
 	slabs_by_rank: [ODIN_HEAP_BIN_RANKS]^Heap_Slab,
+
+	purge_countdown: int,
 
 	current_memory: int,
 	peak_memory:    int,
@@ -787,6 +838,105 @@ heap_remove_ranked_slab :: proc "contextless" (slab: ^Heap_Slab) {
 //
 
 /*
+`ODIN_HEAP_SUPERPAGE_DENSITY` is how much of the Segments a heap already has of
+some kind must be made of bins before another Segment of that kind is given over
+to the operating system's largest pages, as a percentage between 0 and 100.
+
+A bin is rounded up to a power of two, so a Segment being full of bins does not
+mean the program is using what it has been given: a request of 1030 bytes takes a
+2048-byte bin. Large pages make the whole of that rounding resident, which is a
+reason to ask for them only where the Segments of that kind are made mostly of
+bins. The default of 90 is the point past which making the rest of a Segment
+resident costs a tenth of it or less, which is a fair price for the translation a
+large page saves.
+
+A value of zero turns the check off.
+*/
+ODIN_HEAP_SUPERPAGE_DENSITY :: #config(ODIN_HEAP_SUPERPAGE_DENSITY, 90 /* percent, 0 disables the check */)
+
+/*
+Whether the Segments of `class` the heap already has are being filled.
+
+`held` is how many bytes of bins those Segments are handing out and `mapped` is
+how much address space they take up between them.
+
+For a Large Segment, which holds one Bin size on its own, only Segments currently
+dedicated to `bin_size` count: they serve a single size class, so the evidence
+that another one is worth giving large pages to is that this one has been filled.
+A Small Segment is divided into many Slabs that serve every small Bin size
+between them, so the whole class is its evidence.
+*/
+@(require_results)
+heap_segments_are_being_filled :: proc "contextless" (class: Heap_Slab_Class, bin_size: int) -> (held, mapped: int) {
+	for segment := local_heap.segments; segment != nil; segment = segment.next_segment {
+		if segment.slab_size_class != class {
+			continue
+		}
+		if class == .Large && segment.slabs[0].bin_size != bin_size {
+			// A Large Segment is dedicated to one Bin size while it is in use, so
+			// one working on a different size says nothing about this one.
+			continue
+		}
+		mapped += segment.size
+		for &slab in segment.slabs {
+			if slab.bin_size == 0 {
+				continue
+			}
+			held += (slab.max_bins - slab.free_bins) * slab.bin_size
+		}
+	}
+	return
+}
+
+/*
+Whether a new Segment should be given over to the operating system's largest
+pages.
+
+Asking for a large page is a bet that the Segment behind it is going to be used.
+The first store into the mapping makes the whole of a large page resident, so a
+program that allocates a little memory across a handful of size classes pays a
+large page for each of them and ends up holding several times the memory it asked
+for. That is the case the kernel's own documentation warns about, which is why a
+large page is meant to be asked for only where the access pattern is known in
+advance not to increase the footprint.
+
+The bet is made on evidence from the Segments of the same kind that the heap
+already has: they must be handing out `ODIN_HEAP_SUPERPAGE_THRESHOLD` worth of bins
+between them, and `ODIN_HEAP_SUPERPAGE_DENSITY` of what they take up must be those
+bins. What counts as the same kind is described on
+`heap_segments_are_being_filled`.
+
+A program that allocates a few buffers of different sizes never provides the
+evidence, however much it holds in total, and keeps its memory and only the pages
+it touches. One that fills the same size class over and over provides it, and
+gets the pages.
+
+This has to be settled before anything is written to the mapping.
+*/
+@(require_results)
+heap_should_use_superpages :: proc "contextless" (bin_size: int) -> bool {
+	minimum := ODIN_HEAP_SUPERPAGE_THRESHOLD
+	if minimum <= 0 {
+		if minimum = 2 * heap_get_segment_size(); minimum <= 0 {
+			return false
+		}
+	}
+
+	class := heap_get_size_class(bin_size)
+	held, mapped := heap_segments_are_being_filled(class, bin_size)
+	if held < minimum {
+		return false
+	}
+
+	when ODIN_HEAP_SUPERPAGE_DENSITY > 0 {
+		if held * 100 < mapped * ODIN_HEAP_SUPERPAGE_DENSITY {
+			return false
+		}
+	}
+	return true
+}
+
+/*
 Allocate memory for a Segment capable of supporting `bin_size` from the
 operating system and do any initialization work.
 
@@ -796,6 +946,9 @@ requested size class.
 @(no_sanitize_address)
 heap_make_segment :: proc "contextless" (bin_size: int, replacement: ^Heap_Segment = nil) -> (segment: ^Heap_Segment) {
 	heap_ensure_segment_size()
+
+	// Hand back the pages sitting idle before mapping anything new.
+	heap_purge_empty_segments()
 
 	class := heap_get_size_class(bin_size)
 
@@ -875,14 +1028,30 @@ heap_make_segment :: proc "contextless" (bin_size: int, replacement: ^Heap_Segme
 		return
 	}
 
+	assert_contextless(uintptr(segment) & uintptr(heap_get_segment_size()-1) == 0, "The operating system returned virtual memory which isn't aligned to the Segment boundary.")
+	assert_contextless(slabs > 0, "The heap allocator mismanaged the calculation for the number of slabs on making a new segment.")
+
+	// (segment.owner and segment.heap will be set by `heap_add_segment`.)
+	//
+	// NOTE: This must happen before the book-keeping below is written to, as the
+	// first store into the mapping is what gives the operating system the chance
+	// to back it with a large page. The pages a Segment is backed by are decided
+	// once, here, because a range whose first page is already there cannot be
+	// given a superpage without filling the whole thing in.
 	when ODIN_OS == .Linux {
 		// Remade Segments keep the marking from their first life.
 		if replacement == nil {
-			vm_advise_hugepages(segment, mapped)
+			when ODIN_HEAP_SUPERPAGES {
+				if heap_should_use_superpages(bin_size) {
+					vm_advise_hugepages(segment, mapped)
+				} else {
+					vm_avoid_hugepages(segment, mapped)
+				}
+			} else {
+				vm_avoid_hugepages(segment, mapped)
+			}
 		}
 	}
-	assert_contextless(uintptr(segment) & uintptr(heap_get_segment_size()-1) == 0, "The operating system returned virtual memory which isn't aligned to the Segment boundary.")
-	assert_contextless(slabs > 0, "The heap allocator mismanaged the calculation for the number of slabs on making a new segment.")
 
 	// (segment.owner and segment.heap will be set by `heap_add_segment`.)
 	segment.magic = heap_segment_magic(segment)
@@ -1406,6 +1575,24 @@ heap_free_slab :: proc "contextless" (segment: ^Heap_Segment, slab: ^Heap_Slab) 
 }
 
 /*
+Return the pages of every Segment which holds no bins in flight back to the
+operating system.
+
+This runs where the heap is about to ask for more memory: pages sitting idle
+are handed back first, so growth reuses what the program already gave up
+before mapping anything new. Memory used again in the meantime was never given
+up at all, so steady churn pays nothing for this.
+*/
+@(no_sanitize_address)
+heap_purge_empty_segments :: proc "contextless" () {
+	for segment := local_heap.segments; segment != nil; segment = segment.next_segment {
+		if segment.allocated_bins == 0 {
+			heap_purge_segment(segment)
+		}
+	}
+}
+
+/*
 Return the pages that a Segment's Slabs occupy to the operating system while
 keeping the Segment itself, so that it can be filled up again without asking
 the operating system for memory.
@@ -1522,6 +1709,16 @@ heap_free_bin :: proc "contextless" (segment: ^Heap_Segment, slab: ^Heap_Slab, p
 		// The slab has free bins again, which means we can place it back
 		// into its appropriate ranked list.
 		heap_add_ranked_slab(slab)
+	}
+
+	// Hand back idle pages in batches: every interval of frees, the Segments
+	// holding nothing are purged. This runs once the free above is fully done,
+	// so no bin is ever counted but unlisted while the bump cursor restarts.
+	if local_heap.purge_countdown == 0 {
+		local_heap.purge_countdown = ODIN_HEAP_PURGE_INTERVAL
+		heap_purge_empty_segments()
+	} else {
+		local_heap.purge_countdown -= 1
 	}
 
 	return false
