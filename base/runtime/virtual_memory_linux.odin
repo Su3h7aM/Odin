@@ -69,6 +69,9 @@ MAP_ANONYMOUS  :: 0x20
 MREMAP_MAYMOVE :: 0x01
 
 MADV_DONTNEED :: 0x04
+MADV_HUGEPAGE :: 0x0E
+MADV_GUARD_INSTALL :: 0x66
+MADV_GUARD_REMOVE  :: 0x67
 
 /*
 ThreadSanitizer keeps a shadow of every mapping a program has, and it learns
@@ -145,6 +148,33 @@ vm_remap :: proc "contextless" (memory: rawptr, old_size, new_size: int, may_mov
 }
 
 /*
+Guard `memory` so that any access faults, without splitting the mapping the
+way `mprotect` does. Returns false on kernels older than Linux 6.10, and the
+caller falls back to protecting the page.
+*/
+@(private)
+vm_guard_pages :: proc "contextless" (memory: rawptr, size: int) -> (guarded: bool) {
+	when .Thread in ODIN_SANITIZER_FLAGS {
+		return c_madvise(memory, uint(size), MADV_GUARD_INSTALL) == 0
+	} else {
+		return int(intrinsics.syscall(SYS_madvise, uintptr(memory), uintptr(size), MADV_GUARD_INSTALL)) == 0
+	}
+}
+
+/*
+Advise the kernel that `memory` is worth backing with transparent huge pages.
+Kernels without support ignore it.
+*/
+@(private)
+vm_advise_hugepages :: proc "contextless" (memory: rawptr, size: int) {
+	when .Thread in ODIN_SANITIZER_FLAGS {
+		c_madvise(memory, uint(size), MADV_HUGEPAGE)
+	} else {
+		intrinsics.syscall(SYS_madvise, uintptr(memory), uintptr(size), MADV_HUGEPAGE)
+	}
+}
+
+/*
 Give the pages backing `memory` back to the operating system, which reads as
 zero the next time it is used.
 */
@@ -195,63 +225,53 @@ _get_superpage_size :: proc "contextless" () -> int {
 		return 0
 	}
 
-	// Parse the file. It's in a format of "KEY:  VALUE\n" with a
-	// variable number of spaces after the colon.
-	str := buf[:read]
-	for len(str) > 0 {
-		key, val: []u8
-		// Get the key.
-		for c, i in str {
-			if c == ':' {
-				key, str = str[:i], str[1+i:]
-				break
+	// Only one line of the file is of interest, e.g. "Hugepagesize:       2048 kB".
+	// Anything unparseable means no superpage, which the caller handles by
+	// falling back to the default Segment size.
+	KEY :: "Hugepagesize:"
+	i := 0
+	for i < read {
+		if i + len(KEY) <= read && string(buf[i:i+len(KEY)]) == KEY {
+			j := i + len(KEY)
+			for j < read && buf[j] == ' ' {
+				j += 1
 			}
-		}
-		// Trim the spaces.
-		for c, i in str {
-			if c != ' ' {
-				str = str[i:]
-				break
+			bytes := 0
+			digits := 0
+			// Ten digits always fit; no superpage needs more.
+			for j < read && digits < 10 && '0' <= buf[j] && buf[j] <= '9' {
+				bytes = bytes*10 + int(buf[j]-'0')
+				digits += 1
+				j += 1
 			}
-		}
-		// Get the value.
-		for c, i in str {
-			if c == '\n' {
-				val, str = str[:i], str[1+i:]
-				break
+			if digits == 0 {
+				return 0
 			}
-		}
-		// Break in the event something was parsed incorrectly.
-		if len(key) == 0 || len(val) == 0 {
-			break
-		}
-
-		if string(key) == "Hugepagesize" {
-			// The value will be in a format like: 2048 kB
-			n, unit: []u8
-			for c, i in val {
-				if c == ' ' {
-					n = val[:i]
-					unit = val[1+i:]
-					break
+			if j < read && buf[j] == ' ' {
+				j += 1
+			}
+			// A hostile value yields no superpage, not a wrap.
+			mult := 0
+			if j + 2 <= read {
+				switch string(buf[j:j+2]) {
+				case "kB":
+					mult = Kilobyte
+				case "mB":
+					mult = Megabyte
+				case "gB":
+					mult = Gigabyte
 				}
 			}
-			// Convert it to a number.
-			bytes := 0
-			for c in n {
-				bytes *= 10
-				bytes += int(c - '0')
+			if mult == 0 || bytes > max(int) / mult {
+				return 0
 			}
-			// The man page for `proc_meminfo` does not state if it
-			// uses measurements other than "kB" but just to be safe.
-			switch string(unit) {
-			case "kB": bytes *= Kilobyte
-			case "mB": bytes *= Megabyte
-			case "gB": bytes *= Gigabyte
-			}
-
-			return bytes
+			return bytes * mult
 		}
+		// Not the line wanted; skip to the next one.
+		for i < read && buf[i] != '\n' {
+			i += 1
+		}
+		i += 1
 	}
 	return 0
 }
@@ -281,6 +301,11 @@ _allocate_virtual_memory_superpage :: proc "contextless" () -> rawptr {
 }
 
 _allocate_virtual_memory_aligned :: proc "contextless" (size: int, alignment: int) -> rawptr {
+	// The mapping below adds `alignment` to `size`, which must not wrap
+	// (CWE-190). Fail clean with nil, as every caller already handles.
+	if size > max(int) - alignment {
+		return nil
+	}
 	if alignment <= page_size {
 		// This is the simplest case.
 		//

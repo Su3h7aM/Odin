@@ -264,19 +264,26 @@ heap_bin_stride :: #force_inline proc "contextless" (bin_size: int) -> int {
 }
 
 /*
+Settle the size every Segment has, once. Every path that maps a Segment comes
+through here, since global initializers may allocate before runtime init runs.
+*/
+heap_ensure_segment_size :: #force_inline proc "contextless" () {
+	when ODIN_HEAP_SEGMENT_SIZE_OVERRIDE == 0 {
+		if segment_size == 0 {
+			if page_size == 0 {
+				_init_virtual_memory()
+			}
+			segment_size = heap_choose_segment_size()
+		}
+	}
+}
+
+/*
 Allocate a new Segment that may be used to store either Small or Large slabs.
 */
 @(require_results)
 heap_allocate_segment :: #force_inline proc "contextless" () -> ^Heap_Segment {
-	// Global initializers may allocate before runtime init procedures have run,
-	// and the virtual memory layer is set up by an init procedure of its own, so
-	// this works out whether it is the one being set up here.
-	if segment_size == 0 {
-		if page_size == 0 {
-			_init_virtual_memory()
-		}
-		segment_size = heap_choose_segment_size()
-	}
+	heap_ensure_segment_size()
 
 	size := heap_get_segment_size()
 	if size == superpage_size {
@@ -601,15 +608,8 @@ are accounted during the tally of `get_local_heap_info`.
 `allocated_bins` is the count of bins which have been handed to the program
 and not yet given back. A Segment without any of them is holding nothing but
 empty space, so its pages may be returned to the operating system without the
-program ever noticing.
-
-`remote_announced` and `remote_merged` count the bins which other threads have
-freed onto this Segment's Slabs, and the ones the owning thread has merged
-back. A thread announces a bin before it pushes it, while the bin still keeps
-the Segment alive, so the difference is never less than the number of bins
-waiting on a Slab's `remote_free_list`. The owner reads the two to skip a Segment
-which has nothing waiting, rather than looking at each of its Slabs. A push that
-has been announced but has not landed yet is found by the next merge.
+program ever noticing. A bin freed by another thread stays counted until its
+owner merges it, which is what keeps the Segment alive under such a free.
 
 `slabs` is the slice of Slab metadata which contains pointers to each Slab's
 starting address and byte capacity. This information is used to subdivide the
@@ -633,8 +633,6 @@ Heap_Segment :: struct {
 
 	free_slabs: int,
 	allocated_bins: int,
-	remote_announced: int, // atomic
-	remote_merged: int,
 	slabs: []Heap_Slab,
 	/* ... the slab space itself ... */
 }
@@ -797,6 +795,8 @@ requested size class.
 */
 @(no_sanitize_address)
 heap_make_segment :: proc "contextless" (bin_size: int, replacement: ^Heap_Segment = nil) -> (segment: ^Heap_Segment) {
+	heap_ensure_segment_size()
+
 	class := heap_get_size_class(bin_size)
 
 	slabs: int
@@ -848,7 +848,13 @@ heap_make_segment :: proc "contextless" (bin_size: int, replacement: ^Heap_Segme
 			if segment != nil {
 				// Protecting is a hint, and an allocation without its guard
 				// page is as correct as it is without a secure build.
-				_ = protect_virtual_memory(rawptr(uintptr(segment) + uintptr(guard_at)), get_page_size())
+				guarded := false
+				when ODIN_OS == .Linux {
+					guarded = vm_guard_pages(rawptr(uintptr(segment) + uintptr(guard_at)), get_page_size())
+				}
+				if !guarded {
+					_ = protect_virtual_memory(rawptr(uintptr(segment) + uintptr(guard_at)), get_page_size())
+				}
 			}
 		} else {
 			segment = cast(^Heap_Segment)allocate_virtual_memory_aligned(mapped, heap_get_segment_size())
@@ -867,6 +873,13 @@ heap_make_segment :: proc "contextless" (bin_size: int, replacement: ^Heap_Segme
 	if segment == nil {
 		// The operating system may be out of memory.
 		return
+	}
+
+	when ODIN_OS == .Linux {
+		// Remade Segments keep the marking from their first life.
+		if replacement == nil {
+			vm_advise_hugepages(segment, mapped)
+		}
 	}
 	assert_contextless(uintptr(segment) & uintptr(heap_get_segment_size()-1) == 0, "The operating system returned virtual memory which isn't aligned to the Segment boundary.")
 	assert_contextless(slabs > 0, "The heap allocator mismanaged the calculation for the number of slabs on making a new segment.")
@@ -1248,20 +1261,14 @@ never waits on the thread which owns the Slab, and the owning thread merges the
 list at its next opportunity.
 */
 @(private="file", no_sanitize_address)
-push_onto_remote_free_list :: proc "contextless" (segment: ^Heap_Segment, slab: ^Heap_Slab, list: ^Tagged_Pointer, ptr: rawptr) {
-	// This has to come before the push, not after: once the bin is on the list
-	// the owner may merge it, which can be the last bin of the Segment and end
-	// with the Segment unmapped, and a store to it after that would land on
-	// memory that is no longer ours.
-	intrinsics.atomic_add_explicit(&segment.remote_announced, 1, .Release)
+push_onto_remote_free_list :: proc "contextless" (slab: ^Heap_Slab, list: ^Tagged_Pointer, ptr: rawptr) {
+	// Poison once up front: the bin is unpublished until the exchange succeeds.
+	sanitizer.address_poison_rawptr(ptr, size_of(^uintptr))
 
 	old_head := transmute(Tagged_Pointer)intrinsics.atomic_load_explicit(cast(^u64)list, .Relaxed)
 	for {
 		// Write the next address to this pointer, continuing the linked list.
 		(cast(^uintptr)ptr)^ = heap_mask_link(ptr, uintptr(old_head.pointer))
-
-		// Make sure the memory at the address isn't touched again by the program.
-		sanitizer.address_poison_rawptr(ptr, size_of(^uintptr))
 
 		new_head := Tagged_Pointer{
 			pointer = i64(uintptr(ptr)),
@@ -1272,6 +1279,8 @@ push_onto_remote_free_list :: proc "contextless" (segment: ^Heap_Segment, slab: 
 		if swapped {
 			return
 		}
+		// Lost the race; relax before retrying.
+		intrinsics.cpu_relax()
 		old_head = transmute(Tagged_Pointer)old_head_
 	}
 }
@@ -1289,9 +1298,6 @@ merge_slab_remote_free_list :: proc "contextless" (segment: ^Heap_Segment, slab:
 	assert_contextless(slab.bin_size > 0, "The heap allocator tried to merge the remote frees of a slab which is not in use.")
 	for ptr := heap_take_free_list(&slab.remote_free_list); ptr != nil; /**/ {
 		next := heap_mask_link(ptr, ptr^)
-		// Counted before the bin is freed: freeing the last bin of the Segment
-		// gives the Segment back, and it is not ours to write to after that.
-		segment.remote_merged += 1
 		if merged != nil {
 			merged^ += 1
 		}
@@ -1311,14 +1317,6 @@ Merge the frees which other threads left on this Segment's Slabs.
 */
 @(private="file", no_sanitize_address)
 merge_segment_remote_frees :: proc "contextless" (segment: ^Heap_Segment, merged: ^int = nil) {
-	// Nothing has been announced that has not been merged, so no Slab has
-	// anything on its list.
-	announced := intrinsics.atomic_load_explicit(&segment.remote_announced, .Acquire)
-	assert_contextless(segment.remote_merged <= announced, "The heap allocator merged more remote frees than other threads announced.")
-	if segment.remote_merged == announced {
-		return
-	}
-
 	for &slab in segment.slabs {
 		// A Slab with no bins in flight has none on this list, and none can be
 		// pushed onto it: only a thread holding one of its bins can push.
@@ -2074,7 +2072,7 @@ heap_free :: proc "contextless" (ptr: rawptr, old_size: int = 0) {
 	if intrinsics.atomic_load_explicit(&segment.owner, .Acquire) == get_current_thread_id() {
 		heap_free_bin(segment, slab, ptr)
 	} else {
-		push_onto_remote_free_list(segment, slab, &slab.remote_free_list, ptr)
+		push_onto_remote_free_list(slab, &slab.remote_free_list, ptr)
 	}
 }
 
