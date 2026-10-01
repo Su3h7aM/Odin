@@ -70,6 +70,7 @@ MREMAP_MAYMOVE :: 0x01
 
 MADV_DONTNEED :: 0x04
 MADV_HUGEPAGE :: 0x0E
+MADV_NOHUGEPAGE :: 0x0F
 MADV_GUARD_INSTALL :: 0x66
 MADV_GUARD_REMOVE  :: 0x67
 
@@ -171,6 +172,21 @@ vm_advise_hugepages :: proc "contextless" (memory: rawptr, size: int) {
 		c_madvise(memory, uint(size), MADV_HUGEPAGE)
 	} else {
 		intrinsics.syscall(SYS_madvise, uintptr(memory), uintptr(size), MADV_HUGEPAGE)
+	}
+}
+
+/*
+Advise the kernel that `memory` is not worth backing with transparent huge
+pages. On a machine with collapsing set to `always` this is what keeps a
+sparsely used Segment from being filled in whole the first time any part of
+it is touched. Kernels without support ignore it.
+*/
+@(private)
+vm_avoid_hugepages :: proc "contextless" (memory: rawptr, size: int) {
+	when .Thread in ODIN_SANITIZER_FLAGS {
+		c_madvise(memory, uint(size), MADV_NOHUGEPAGE)
+	} else {
+		intrinsics.syscall(SYS_madvise, uintptr(memory), uintptr(size), MADV_NOHUGEPAGE)
 	}
 }
 
