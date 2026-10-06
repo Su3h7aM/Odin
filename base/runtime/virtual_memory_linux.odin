@@ -20,7 +20,7 @@ when ODIN_ARCH == .amd64 {
 	SYS_read   :: uintptr(3)
 	SYS_close  :: uintptr(6)
 
-	SYS_mmap    :: uintptr(90)
+	SYS_mmap2   :: uintptr(192)
 	SYS_munmap  :: uintptr(91)
 	SYS_mprotect :: uintptr(125)
 	SYS_mremap  :: uintptr(163)
@@ -40,7 +40,7 @@ when ODIN_ARCH == .amd64 {
 	SYS_read   :: uintptr(3)
 	SYS_close  :: uintptr(6)
 
-	SYS_mmap    :: uintptr(90)
+	SYS_mmap2   :: uintptr(192)
 	SYS_munmap  :: uintptr(91)
 	SYS_mprotect :: uintptr(125)
 	SYS_mremap  :: uintptr(163)
@@ -98,8 +98,16 @@ vm_map :: proc "contextless" (size: int) -> (memory: rawptr, ok: bool) {
 		ok = result != nil && uintptr(result) != ~uintptr(0)
 		memory = result
 	} else {
-		result := intrinsics.syscall(SYS_mmap, 0, uintptr(size), PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, ~uintptr(0), 0)
-		ok = int(result) >= 0
+		result: uintptr
+		when ODIN_ARCH == .arm32 || ODIN_ARCH == .i386 {
+			// These ABIs use mmap2, whose final argument is an offset in pages.
+			result = intrinsics.syscall(SYS_mmap2, 0, uintptr(size), PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, ~uintptr(0), 0)
+		} else {
+			result = intrinsics.syscall(SYS_mmap, 0, uintptr(size), PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, ~uintptr(0), 0)
+		}
+		// Linux reserves -1 through -4095 for syscall errors. Do not interpret
+		// a valid mapping in the upper half of a 32-bit address space as an error.
+		ok = result < ~uintptr(4094)
 		memory = rawptr(result)
 	}
 	return
@@ -125,7 +133,7 @@ vm_remap :: proc "contextless" (memory: rawptr, old_size, new_size: int, may_mov
 		flags = MREMAP_MAYMOVE
 	}
 	result := intrinsics.syscall(SYS_mremap, uintptr(memory), uintptr(old_size), uintptr(new_size), flags)
-	ok = int(result) >= 0
+	ok = result < ~uintptr(4094)
 	moved = rawptr(result)
 	return
 }
