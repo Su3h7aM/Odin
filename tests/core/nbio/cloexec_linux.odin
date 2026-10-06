@@ -7,6 +7,8 @@ import "core:sys/linux"
 import "core:testing"
 import "core:time"
 
+FD_CLOEXEC :: 1 // Defined by fcntl.h as the F_GETFD close-on-exec bit.
+
 // A spawned child inherits every descriptor which is not close-on-exec, so an
 // accepted connection must not outlive an exec into a tool the program starts.
 @(test)
@@ -16,7 +18,7 @@ accepted_sockets_are_close_on_exec :: proc(t: ^testing.T) {
 
 		is_cloexec :: proc(fd: int) -> bool {
 			flags, errno := linux.fcntl_getfd(linux.Fd(fd), linux.F_GETFD)
-			return errno == nil && int(flags) & 1 != 0
+			return errno == nil && int(flags) & FD_CLOEXEC != 0
 		}
 
 		server, ep := open_next_available_local_port(t)

@@ -27,6 +27,18 @@ event_loop_guard_exit :: proc(t: ^testing.T) {
 	nbio.release_thread_event_loop()
 }
 
+// The Linux ring wait must split long nanosecond durations into seconds and
+// nanoseconds rather than truncating the seconds component.
+@(test)
+tick_timeout_includes_seconds :: proc(t: ^testing.T) {
+	if event_loop_guard(t) {
+		start := time.tick_now()
+		ev(t, nbio.tick(time.Second), nil)
+		elapsed := time.tick_since(start)
+		testing.expect(t, elapsed >= time.Second, "one-second tick timeout returned early")
+	}
+}
+
 // Tests that all poly variants are correctly passing through arguments, and that
 // all procs eventually get their callback called.
 //
