@@ -303,8 +303,8 @@ foreign mach {
 	mach_task_self     :: proc() -> mach_port_t ---
 	mach_msg           :: proc(header: rawptr, option: Msg_Option_Flags, send_size: u32, receive_limit: u32, receive_name: mach_port_t, timeout: u32, notify: mach_port_t) -> Kern_Return ---
 	mach_msg_send      :: proc(header: rawptr) -> Kern_Return ---
-	mach_vm_allocate   :: proc(target_task: task_t, adddress: u64, size: u64, flags: i32) -> Kern_Return ---
-	mach_vm_deallocate :: proc(target_task: task_t, adddress: ^u64, size: u64) -> Kern_Return ---
+	mach_vm_allocate   :: proc(target_task: task_t, address: ^u64, size: u64, flags: i32) -> Kern_Return ---
+	mach_vm_deallocate :: proc(target_task: task_t, address: u64, size: u64) -> Kern_Return ---
 	mach_vm_remap      :: proc(target_task: task_t, page: rawptr, size: u64, mask: u64, flags: i32, src_task: task_t, src_address: u64, copy: b32, cur_protection: ^i32, max_protection: ^i32, inheritance: VM_Inherit) -> Kern_Return ---
 	mach_vm_region_recurse :: proc(target_task: task_t, address: ^u64, size: ^u64, depth: ^u32, info: vm_region_recurse_info_t, count: ^u32) -> Kern_Return ---
 	vm_page_size:  u64

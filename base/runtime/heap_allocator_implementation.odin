@@ -468,7 +468,7 @@ find_segment_from_pointer :: #force_inline proc "contextless" (ptr: rawptr) -> ^
 // ASCII. Any fixed non-zero value would do: every Segment holds it mixed with
 // its own address, which is how an address given to `free` or `resize` is told
 // apart from one that never came from a Segment.
-HEAP_SEGMENT_MAGIC :: 0x6665_6F72_616D_616C
+HEAP_SEGMENT_MAGIC :: 0x6665_6F72_616D_616C when size_of(uintptr) == 8 else 0x616D_616C
 
 @(require_results)
 heap_segment_magic :: #force_inline proc "contextless" (segment: ^Heap_Segment) -> uintptr {
