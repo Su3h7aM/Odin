@@ -2219,8 +2219,6 @@ pointer never becomes safe to use through reuse.
 */
 @(require_results, no_sanitize_address)
 heap_alloc :: proc "contextless" (size: int, zero_memory: bool = true) -> (ptr: rawptr) {
-	assert_contextless(size >= 0, "The heap allocator was given a negative size to allocate.")
-
 	// Initialize the heap if needed.
 	if intrinsics.expect(local_heap == nil, false) {
 		local_heap = heap_acquire()
@@ -2295,11 +2293,6 @@ heap_resize :: proc "contextless" (old_ptr: rawptr, old_size: int, new_size: int
 	if old_ptr == nil {
 		return heap_alloc(new_size, zero_memory)
 	}
-	assert_contextless(new_size >= 0, "The heap allocator was given a negative size to resize to.")
-	if new_size < 0 {
-		return nil
-	}
-
 	// Look up what the allocator actually handed out for this address.
 	//
 	// `old_size` comes from the caller and, like any length read from the

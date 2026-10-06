@@ -21,8 +21,6 @@ heap_allocator_proc :: proc(
 	old_size: int,
 	loc := #caller_location,
 ) -> ([]byte, Allocator_Error) {
-	assert(alignment >= 0, "Alignment must be greater than or equal to zero.", loc = loc)
-
 	// A negative size, a non-binary alignment, or an alignment beyond what a bin
 	// can give can never be satisfied, so fail with Invalid_Argument in every
 	// build rather than hand back a misaligned address.
