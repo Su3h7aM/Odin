@@ -135,7 +135,7 @@ Guard `memory` so that any access faults, without splitting the mapping the
 way `mprotect` does. Returns false on kernels older than Linux 6.10, and the
 caller falls back to protecting the page.
 */
-vm_guard_pages :: proc "contextless" (memory: rawptr, size: int) -> (guarded: bool) {
+_vm_guard_pages :: proc "contextless" (memory: rawptr, size: int) -> (guarded: bool) {
 	return int(intrinsics.syscall(SYS_madvise, uintptr(memory), uintptr(size), MADV_GUARD_INSTALL)) == 0
 }
 
@@ -143,7 +143,7 @@ vm_guard_pages :: proc "contextless" (memory: rawptr, size: int) -> (guarded: bo
 Advise the kernel that `memory` is worth backing with transparent huge pages.
 Kernels without support ignore it.
 */
-vm_advise_hugepages :: proc "contextless" (memory: rawptr, size: int) {
+_vm_advise_hugepages :: proc "contextless" (memory: rawptr, size: int) {
 	intrinsics.syscall(SYS_madvise, uintptr(memory), uintptr(size), MADV_HUGEPAGE)
 }
 
@@ -153,7 +153,7 @@ pages. On a machine with collapsing set to `always` this is what keeps a
 sparsely used Segment from being filled in whole the first time any part of
 it is touched. Kernels without support ignore it.
 */
-vm_avoid_hugepages :: proc "contextless" (memory: rawptr, size: int) {
+_vm_avoid_hugepages :: proc "contextless" (memory: rawptr, size: int) {
 	intrinsics.syscall(SYS_madvise, uintptr(memory), uintptr(size), MADV_NOHUGEPAGE)
 }
 

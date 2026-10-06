@@ -183,6 +183,42 @@ protect_virtual_memory :: proc "contextless" (ptr: rawptr, size: int) -> (protec
 }
 
 /*
+Install an operating-system guard on `ptr` without splitting its reservation.
+
+Returns false when this facility is unavailable. The caller must fall back to
+`protect_virtual_memory` when a guard is required.
+*/
+@(private)
+vm_guard_pages :: proc "contextless" (ptr: rawptr, size: int) -> (guarded: bool) {
+	when ODIN_OS == .Linux {
+		return _vm_guard_pages(ptr, size)
+	}
+	return false
+}
+
+/*
+Hint that the operating system should back `ptr` with huge pages when possible.
+This is a performance hint; unsupported platforms do nothing.
+*/
+@(private)
+vm_advise_hugepages :: proc "contextless" (ptr: rawptr, size: int) {
+	when ODIN_OS == .Linux {
+		_vm_advise_hugepages(ptr, size)
+	}
+}
+
+/*
+Hint that the operating system should avoid backing `ptr` with huge pages.
+This is a performance hint; unsupported platforms do nothing.
+*/
+@(private)
+vm_avoid_hugepages :: proc "contextless" (ptr: rawptr, size: int) {
+	when ODIN_OS == .Linux {
+		_vm_avoid_hugepages(ptr, size)
+	}
+}
+
+/*
 Make the memory at `ptr` larger without moving it.
 
 Returns false if the memory could not be extended, in which case it is left

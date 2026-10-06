@@ -1007,10 +1007,7 @@ heap_make_segment :: proc "contextless" (bin_size: int, replacement: ^Heap_Segme
 			if segment != nil {
 				// Protecting is a hint, and an allocation without its guard
 				// page is as correct as it is without a secure build.
-				guarded := false
-				when ODIN_OS == .Linux {
-					guarded = vm_guard_pages(rawptr(uintptr(segment) + uintptr(guard_at)), get_page_size())
-				}
+				guarded := vm_guard_pages(rawptr(uintptr(segment) + uintptr(guard_at)), get_page_size())
 				if !guarded {
 					_ = protect_virtual_memory(rawptr(uintptr(segment) + uintptr(guard_at)), get_page_size())
 				}
@@ -1044,18 +1041,16 @@ heap_make_segment :: proc "contextless" (bin_size: int, replacement: ^Heap_Segme
 	// to back it with a large page. The pages a Segment is backed by are decided
 	// once, here, because a range whose first page is already there cannot be
 	// given a superpage without filling the whole thing in.
-	when ODIN_OS == .Linux {
-		// Remade Segments keep the marking from their first life.
-		if replacement == nil {
-			when ODIN_HEAP_SUPERPAGES {
-				if heap_should_use_superpages(bin_size) {
-					vm_advise_hugepages(segment, mapped)
-				} else {
-					vm_avoid_hugepages(segment, mapped)
-				}
+	// Remade Segments keep the marking from their first life.
+	if replacement == nil {
+		when ODIN_HEAP_SUPERPAGES {
+			if heap_should_use_superpages(bin_size) {
+				vm_advise_hugepages(segment, mapped)
 			} else {
 				vm_avoid_hugepages(segment, mapped)
 			}
+		} else {
+			vm_avoid_hugepages(segment, mapped)
 		}
 	}
 
