@@ -5,16 +5,13 @@ import "base:intrinsics"
 ODIN_VIRTUAL_MEMORY_SUPPORTED :: VIRTUAL_MEMORY_SUPPORTED
 
 /*
-Whether the sanitizer's interceptors see the calls this platform makes to give
-memory back.
+Whether the sanitizer's interceptors see mapping and unmapping calls on this
+platform.
 
-ThreadSanitizer keeps a shadow of every mapping a program has, and it learns
-about mappings from its own interceptors of the C library. The Linux
-implementation reaches the operating system through that library when the
-sanitizer is asked for (see `virtual_memory_linux.odin`), so the sanitizer can
-be told what happened. Where the memory is given back with a system call
-instead, the shadow of the range would describe memory which another thread
-maps and uses afterwards, so the pages are kept until the program ends.
+ThreadSanitizer tracks mapping lifetimes through its libc `mmap` and `munmap`
+interceptors. Linux uses those functions when ThreadSanitizer is enabled (see
+`virtual_memory_linux.odin`); the other virtual-memory operations do not alter
+the mapping lifetime.
 */
 VIRTUAL_MEMORY_SANITIZER_INTERCEPTED :: ODIN_OS == .Linux
 
@@ -155,9 +152,8 @@ decommit_virtual_memory :: proc "contextless" (ptr: rawptr, size: int) -> (decom
 			intrinsics.mem_zero(rawptr(uintptr(ptr) + uintptr(end - begin)), int(finish - end))
 		}
 
-		// NOTE: The sanitizer is only told about pages which are given back when
-		// its interceptors can see the call; see
-		// `VIRTUAL_MEMORY_SANITIZER_INTERCEPTED`.
+		// Decommit keeps the mapping in place, so ThreadSanitizer's mmap and
+		// munmap interceptors do not need to be notified here.
 		when .Thread not_in ODIN_SANITIZER_FLAGS || VIRTUAL_MEMORY_SANITIZER_INTERCEPTED {
 			return _decommit_virtual_memory(rawptr(uintptr(start)), int(end - start))
 		}

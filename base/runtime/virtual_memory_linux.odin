@@ -72,32 +72,26 @@ MADV_DONTNEED :: 0x04
 MADV_HUGEPAGE :: 0x0E
 MADV_NOHUGEPAGE :: 0x0F
 MADV_GUARD_INSTALL :: 0x66
-MADV_GUARD_REMOVE  :: 0x67
 
 /*
-ThreadSanitizer keeps a shadow of every mapping a program has, and it learns
-about mappings from its own interceptors of the C library's memory procedures.
-A system call goes straight past those interceptors, which leaves the shadow of
-a range describing memory that has since been given back and handed to another
-thread; there is no other way to tell it what happened. A build which asks for
-the sanitizer therefore reaches the operating system through the C library.
-Everything else uses a system call directly, which is both faster and free of
-the C library.
+ThreadSanitizer tracks mappings through its libc interceptors for `mmap`,
+`munmap`, and `mprotect`. Those calls use libc when ThreadSanitizer is enabled;
+all other virtual-memory operations use system calls directly. Compiler-rt
+guards these interceptors with `SANITIZER_INTERCEPT_MMAP` and registers all
+three in `INIT_MMAP` (`sanitizer_platform_interceptors.h:545` and
+`sanitizer_common_interceptors.inc:7764-7767`).
 */
 when .Thread in ODIN_SANITIZER_FLAGS {
 	foreign {
 		@(link_name="mmap")    c_mmap    :: proc "c" (addr: rawptr, length: uint, prot, flags, fd: i32, offset: i64) -> rawptr ---
 		@(link_name="munmap")  c_munmap  :: proc "c" (addr: rawptr, length: uint) -> i32 ---
 		@(link_name="mprotect") c_mprotect :: proc "c" (addr: rawptr, length: uint, prot: i32) -> i32 ---
-		@(link_name="mremap")  c_mremap  :: proc "c" (addr: rawptr, old_size, new_size: uint, flags: i32) -> rawptr ---
-		@(link_name="madvise") c_madvise :: proc "c" (addr: rawptr, length: uint, advice: i32) -> i32 ---
 	}
 }
 
 /*
 Map `size` bytes of zeroed memory, readable and writable.
 */
-@(private)
 vm_map :: proc "contextless" (size: int) -> (memory: rawptr, ok: bool) {
 	when .Thread in ODIN_SANITIZER_FLAGS {
 		result := c_mmap(nil, uint(size), PROT_READ|PROT_WRITE, i32(MAP_ANONYMOUS|MAP_PRIVATE), -1, 0)
@@ -114,7 +108,6 @@ vm_map :: proc "contextless" (size: int) -> (memory: rawptr, ok: bool) {
 /*
 Return the memory to the operating system.
 */
-@(private)
 vm_unmap :: proc "contextless" (memory: rawptr, size: int) {
 	when .Thread in ODIN_SANITIZER_FLAGS {
 		c_munmap(memory, uint(size))
@@ -126,25 +119,14 @@ vm_unmap :: proc "contextless" (memory: rawptr, size: int) {
 /*
 Move or resize memory previously returned by `vm_map`.
 */
-@(private)
 vm_remap :: proc "contextless" (memory: rawptr, old_size, new_size: int, may_move: bool) -> (moved: rawptr, ok: bool) {
-	when .Thread in ODIN_SANITIZER_FLAGS {
-		flags := i32(0)
-		if may_move {
-			flags = MREMAP_MAYMOVE
-		}
-		result := c_mremap(memory, uint(old_size), uint(new_size), flags)
-		ok = result != nil && uintptr(result) != ~uintptr(0)
-		moved = result
-	} else {
-		flags := uintptr(0)
-		if may_move {
-			flags = MREMAP_MAYMOVE
-		}
-		result := intrinsics.syscall(SYS_mremap, uintptr(memory), uintptr(old_size), uintptr(new_size), flags)
-		ok = int(result) >= 0
-		moved = rawptr(result)
+	flags := uintptr(0)
+	if may_move {
+		flags = MREMAP_MAYMOVE
 	}
+	result := intrinsics.syscall(SYS_mremap, uintptr(memory), uintptr(old_size), uintptr(new_size), flags)
+	ok = int(result) >= 0
+	moved = rawptr(result)
 	return
 }
 
@@ -153,26 +135,16 @@ Guard `memory` so that any access faults, without splitting the mapping the
 way `mprotect` does. Returns false on kernels older than Linux 6.10, and the
 caller falls back to protecting the page.
 */
-@(private)
 vm_guard_pages :: proc "contextless" (memory: rawptr, size: int) -> (guarded: bool) {
-	when .Thread in ODIN_SANITIZER_FLAGS {
-		return c_madvise(memory, uint(size), MADV_GUARD_INSTALL) == 0
-	} else {
-		return int(intrinsics.syscall(SYS_madvise, uintptr(memory), uintptr(size), MADV_GUARD_INSTALL)) == 0
-	}
+	return int(intrinsics.syscall(SYS_madvise, uintptr(memory), uintptr(size), MADV_GUARD_INSTALL)) == 0
 }
 
 /*
 Advise the kernel that `memory` is worth backing with transparent huge pages.
 Kernels without support ignore it.
 */
-@(private)
 vm_advise_hugepages :: proc "contextless" (memory: rawptr, size: int) {
-	when .Thread in ODIN_SANITIZER_FLAGS {
-		c_madvise(memory, uint(size), MADV_HUGEPAGE)
-	} else {
-		intrinsics.syscall(SYS_madvise, uintptr(memory), uintptr(size), MADV_HUGEPAGE)
-	}
+	intrinsics.syscall(SYS_madvise, uintptr(memory), uintptr(size), MADV_HUGEPAGE)
 }
 
 /*
@@ -181,26 +153,16 @@ pages. On a machine with collapsing set to `always` this is what keeps a
 sparsely used Segment from being filled in whole the first time any part of
 it is touched. Kernels without support ignore it.
 */
-@(private)
 vm_avoid_hugepages :: proc "contextless" (memory: rawptr, size: int) {
-	when .Thread in ODIN_SANITIZER_FLAGS {
-		c_madvise(memory, uint(size), MADV_NOHUGEPAGE)
-	} else {
-		intrinsics.syscall(SYS_madvise, uintptr(memory), uintptr(size), MADV_NOHUGEPAGE)
-	}
+	intrinsics.syscall(SYS_madvise, uintptr(memory), uintptr(size), MADV_NOHUGEPAGE)
 }
 
 /*
 Give the pages backing `memory` back to the operating system, which reads as
 zero the next time it is used.
 */
-@(private)
 vm_release_pages :: proc "contextless" (memory: rawptr, size: int) -> (released: bool) {
-	when .Thread in ODIN_SANITIZER_FLAGS {
-		return c_madvise(memory, uint(size), MADV_DONTNEED) == 0
-	} else {
-		return int(intrinsics.syscall(SYS_madvise, uintptr(memory), uintptr(size), MADV_DONTNEED)) == 0
-	}
+	return int(intrinsics.syscall(SYS_madvise, uintptr(memory), uintptr(size), MADV_DONTNEED)) == 0
 }
 
 _init_virtual_memory :: proc "contextless" () {
