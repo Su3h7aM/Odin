@@ -300,7 +300,8 @@ create_raw_buffered :: proc(#any_int msg_size, msg_alignment: int, #any_int cap:
 	if stride > CACHE_LINE/2 {
 		stride = runtime.align_forward_int(stride, CACHE_LINE)
 	}
-	align := max(RING_PAD, msg_alignment)
+	// The counters need cache-line alignment, not the full spacing between them.
+	align := max(CACHE_LINE, msg_alignment)
 
 	ring_offset  := runtime.align_forward_int(size_of(Raw_Chan), RING_PAD)
 	slots_offset := runtime.align_forward_int(ring_offset + size_of(Raw_Ring), align)
