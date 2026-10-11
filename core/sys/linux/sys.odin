@@ -2193,7 +2193,10 @@ pivot_root :: proc "contextless" (new_root: cstring, old_root: cstring) -> (Errn
 */
 prctl :: proc "contextless" (op: i32, args: ..uint) -> (Errno) {
 	assert_contextless(len(args) <= 4)
-	ret := syscall(SYS_prctl, op, args[0], args[1], args[2], args[3])
+	// The kernel always reads four arguments, so absent ones are zero.
+	padded: [4]uint
+	copy(padded[:], args)
+	ret := syscall(SYS_prctl, op, padded[0], padded[1], padded[2], padded[3])
 	return Errno(-ret)
 }
 
