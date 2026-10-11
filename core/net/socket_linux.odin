@@ -251,7 +251,7 @@ _peer_endpoint :: proc(sock: Any_Socket) -> (ep: Endpoint, err: Socket_Info_Erro
 @(private)
 _accept_tcp :: proc(sock: TCP_Socket, options := DEFAULT_TCP_OPTIONS) -> (tcp_client: TCP_Socket, endpoint: Endpoint, err: Accept_Error) {
 	addr: linux.Sock_Addr_Any
-	client_sock, errno := linux.accept(linux.Fd(sock), &addr)
+	client_sock, errno := linux.accept(linux.Fd(sock), &addr, {.CLOEXEC})
 	if errno != .NONE {
 		return {}, {}, _accept_error(errno)
 	}
