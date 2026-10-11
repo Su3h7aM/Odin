@@ -222,6 +222,7 @@ Allocate a new Segment that may be used to store either Small or Large slabs.
 @(require_results)
 heap_allocate_segment :: #force_inline proc "contextless" () -> ^Heap_Segment {
 	when ODIN_HEAP_SEGMENT_SIZE_OVERRIDE == 0 {
+		_ = get_page_size()
 		if superpage_size != 0 {
 			return cast(^Heap_Segment)allocate_virtual_memory_superpage()
 		} else {
@@ -239,6 +240,7 @@ Get the constant size for all segments. This size also dictates each segment's a
 @(require_results)
 heap_get_segment_size :: #force_inline proc "contextless" () -> int {
 	when ODIN_HEAP_SEGMENT_SIZE_OVERRIDE == 0 {
+		_ = get_page_size()
 		if size := superpage_size; size != 0 {
 			return size
 		} else {

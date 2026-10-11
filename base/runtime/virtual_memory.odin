@@ -16,9 +16,24 @@ This may be zero if unavailable.
 */
 superpage_size: int
 
+/*
+Returns the operating system's page size, setting up the virtual memory layer
+first if nothing has yet.
+
+Global initializers, such as the one for `os.args`, may allocate before the
+runtime `@(init)` procedures have run, so every entry point that reads
+`page_size` or `superpage_size` calls this first.
+*/
+get_page_size :: proc "contextless" () -> int {
+	if page_size == 0 {
+		_init_virtual_memory()
+	}
+	return page_size
+}
+
 @(init, private)
 init_virtual_memory :: proc "contextless" () {
-	_init_virtual_memory()
+	_ = get_page_size()
 }
 
 /*
@@ -30,6 +45,7 @@ system.
 */
 @(require_results)
 allocate_virtual_memory :: proc "contextless" (size: int) -> rawptr {
+	_ = get_page_size()
 	return _allocate_virtual_memory(size)
 }
 
@@ -51,6 +67,7 @@ operating system or if the feature is otherwise unavailable.
 */
 @(require_results)
 allocate_virtual_memory_superpage :: proc "contextless" () -> rawptr {
+	_ = get_page_size()
 	if superpage_size == 0 {
 		return nil
 	}
@@ -69,6 +86,7 @@ data that is at least `size` bytes large but may be larger, due to rounding
 @(require_results)
 allocate_virtual_memory_aligned :: proc "contextless" (size: int, alignment: int) -> rawptr {
 	assert_contextless(is_power_of_two(alignment))
+	_ = get_page_size()
 	return _allocate_virtual_memory_aligned(size, alignment)
 }
 
@@ -114,5 +132,6 @@ resize_virtual_memory :: proc "contextless" (ptr: rawptr, old_size: int, new_siz
 	if old_size == new_size {
 		return ptr
 	}
+	_ = get_page_size()
 	return _resize_virtual_memory(ptr, old_size, new_size, alignment)
 }
