@@ -49,6 +49,7 @@ download_assets :: proc "contextless" () {
 @(require) import "sync/chan"
 @(require) import "sys/posix"
 @(require) import "sys/kqueue"
+@(require) import "sys/linux"
 @(require) import "sys/windows"
 @(require) import "text/edit"
 @(require) import "text/i18n"

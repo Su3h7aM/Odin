@@ -415,6 +415,16 @@ TIOCGWINSZ :: 0x5413
 /* Get terminal attributes; succeeds on terminals, fails with ENOTTY otherwise */
 TCGETS :: 0x5401
 
+/*
+	Operations for `prctl` that set and get the signal a process receives when
+	its parent thread terminates. Defined in `linux/prctl.h`.
+
+	`PR_SET_PDEATHSIG` takes the signal number, zero clears it.
+	`PR_GET_PDEATHSIG` takes a pointer to an `i32` to store the signal in.
+*/
+PR_SET_PDEATHSIG :: 1
+PR_GET_PDEATHSIG :: 2
+
 IORING_TIMEOUT_CLOCK_MASK  :: IO_Uring_Timeout_Flags{.BOOTTIME, .REALTIME}
 IORING_TIMEOUT_UPDATE_MASK :: IO_Uring_Timeout_Flags{.UPDATE, .LINK_TIMEOUT_UPDATE}
 
