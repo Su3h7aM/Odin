@@ -36,7 +36,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/raise.html ]]
 	*/
-	raise :: proc(sig: Signal) -> result ---
+	when ODIN_OS != .Linux {
+		raise :: proc(sig: Signal) -> result ---
+	}
 }
 
 Signal :: enum c.int {

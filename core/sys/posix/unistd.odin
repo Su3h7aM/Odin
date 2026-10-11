@@ -366,7 +366,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getegid.html ]]
 	*/
-	getegid :: proc() -> gid_t ---
+	when ODIN_OS != .Linux {
+		getegid :: proc() -> gid_t ---
+	}
 
 	/*
 	Returns the effective user ID of the calling process.
@@ -375,7 +377,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/geteuid.html ]]
 	*/
-	geteuid :: proc() -> uid_t ---
+	when ODIN_OS != .Linux {
+		geteuid :: proc() -> uid_t ---
+	}
 
 	/*
 	Returns the real group ID of the calling process.
@@ -384,7 +388,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getgid.html ]]
 	*/
-	getgid :: proc() -> gid_t ---
+	when ODIN_OS != .Linux {
+		getgid :: proc() -> gid_t ---
+	}
 
 	/*
 	Fills the grouplist array with the current supplementary group IDs of the calling process.
@@ -519,7 +525,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getpgid.html ]]
 	*/
-	getpgid :: proc(pid: pid_t) -> pid_t ---
+	when ODIN_OS != .Linux {
+		getpgid :: proc(pid: pid_t) -> pid_t ---
+	}
 
 	/*
 	Returns the process group ID of the calling process.
@@ -537,7 +545,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getpid.html ]]
 	*/
-	getpid :: proc() -> pid_t ---
+	when ODIN_OS != .Linux {
+		getpid :: proc() -> pid_t ---
+	}
 
 	/*
 	Returns the parent process ID.
@@ -546,7 +556,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getppid.html ]]
 	*/
-	getppid :: proc() -> pid_t ---
+	when ODIN_OS != .Linux {
+		getppid :: proc() -> pid_t ---
+	}
 
 
 	/*
@@ -557,7 +569,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getsid.html ]]
 	*/
-	getsid :: proc(pid: pid_t) -> pid_t ---
+	when ODIN_OS != .Linux {
+		getsid :: proc(pid: pid_t) -> pid_t ---
+	}
 
 	/*
 	Returns the real user ID of the calling process.
@@ -566,7 +580,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getuid.html ]]
 	*/
-	getuid :: proc() -> uid_t ---
+	when ODIN_OS != .Linux {
+		getuid :: proc() -> uid_t ---
+	}
 
 	/*
 	Tests whether fildes is associated with a terminal device.
@@ -784,7 +800,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/setpgid.html ]]
 	*/
-	setpgid :: proc(pid: pid_t, pgid: pid_t) -> result ---
+	when ODIN_OS != .Linux {
+		setpgid :: proc(pid: pid_t, pgid: pid_t) -> result ---
+	}
 
 	/*
 	Set the process group ID to that of the process.
@@ -816,7 +834,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/setsid.html ]]
 	*/
-	setsid :: proc() -> pid_t ---
+	when ODIN_OS != .Linux {
+		setsid :: proc() -> pid_t ---
+	}
 
 	/*
 	Set user ID.

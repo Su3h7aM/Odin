@@ -26,14 +26,18 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/kill.html ]]
 	*/
-	kill :: proc(pid: pid_t, sig: Signal) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		kill :: proc(pid: pid_t, sig: Signal) -> result ---
+	}
 
 	/*
 	Shorthand for `kill(-pgrp, sig)` which will kill all processes in the given process group.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/killpg.html ]]
 	*/
-	killpg :: proc(pgrp: pid_t, sig: Signal) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		killpg :: proc(pgrp: pid_t, sig: Signal) -> result ---
+	}
 
 	/*
 	Writes a language-dependent message to stderror.
@@ -71,25 +75,37 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/pthread_sigmask.html ]]
 	*/
-	@(link_name=LSIGPROCMASK)
-	sigprocmask :: proc(how: Sig, set: ^sigset_t, oldset: ^sigset_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LSIGPROCMASK)
+		sigprocmask :: proc(how: Sig, set: ^sigset_t, oldset: ^sigset_t) -> result ---
+	}
 
 	/*
 	Examine and change a signal action.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigaction.html ]]
 	*/
-	@(link_name=LSIGACTION)
-	sigaction :: proc(sig: Signal, act: ^sigaction_t, oact: ^sigaction_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LSIGACTION)
+		sigaction :: proc(sig: Signal, act: ^sigaction_t, oact: ^sigaction_t) -> result ---
+	}
 
-	@(link_name=LSIGADDSET)
-	sigaddset :: proc(set: ^sigset_t, signo: Signal) -> result ---
-	@(link_name=LSIGDELSET)
-	sigdelset :: proc(^sigset_t, Signal) -> c.int ---
-	@(link_name=LSIGEMPTYSET)
-	sigemptyset :: proc(^sigset_t) -> c.int ---
-	@(link_name=LSIGFILLSET)
-	sigfillset :: proc(^sigset_t) -> c.int ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LSIGADDSET)
+		sigaddset :: proc(set: ^sigset_t, signo: Signal) -> result ---
+	}
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LSIGDELSET)
+		sigdelset :: proc(^sigset_t, Signal) -> c.int ---
+	}
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LSIGEMPTYSET)
+		sigemptyset :: proc(^sigset_t) -> c.int ---
+	}
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LSIGFILLSET)
+		sigfillset :: proc(^sigset_t) -> c.int ---
+	}
 
 	/*
 	Set and get the signal alternate stack context.
@@ -156,8 +172,10 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigismember.html ]]
 	*/
-	@(link_name=LSIGISMEMBER)
-	sigismember :: proc(set: ^sigset_t, signo: Signal) -> c.int ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LSIGISMEMBER)
+		sigismember :: proc(set: ^sigset_t, signo: Signal) -> c.int ---
+	}
 
 	/*
 	Stores the set of signals that are blocked from delivery to the calling thread and that are pending
@@ -165,8 +183,10 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigpending.html ]]
 	*/
-	@(link_name=LSIGPENDING)
-	sigpending :: proc(set: ^sigset_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LSIGPENDING)
+		sigpending :: proc(set: ^sigset_t) -> result ---
+	}
 
 	/*
 	Wait for one of the given signals.
@@ -175,8 +195,10 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigsuspend.html ]]
 	*/
-	@(link_name=LSIGSUSPEND)
-	sigsuspend :: proc(sigmask: ^sigset_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LSIGSUSPEND)
+		sigsuspend :: proc(sigmask: ^sigset_t) -> result ---
+	}
 
 	/*
 	Wait for queued signals.
