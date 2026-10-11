@@ -22,6 +22,8 @@ foreign lib {
 
 	/*
 	Scan the directory dir, calling the function referenced by sel on each directory entry.
+	On Linux scandir and alphasort remain libc procedures. The returned list
+	and entries belong to libc and must be released with posix.free.
 
 	Example:
 		list: [^]^posix.dirent
@@ -46,85 +48,89 @@ foreign lib {
 		filter:   proc "c" (^dirent) -> b32 = nil,
 		compar:   proc "c" ([^]^dirent, [^]^dirent) -> c.int = alphasort,
 	) -> c.int ---
+}
 
-	/*
-	Close the directory stream referred to by the argument dirp.
+when ODIN_OS != .Linux {
+	foreign lib {
+		/*
+		Close the directory stream referred to by the argument dirp.
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/closedir.html ]]
-	*/
-	closedir :: proc(dirp: DIR) -> result ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/closedir.html ]]
+		*/
+		closedir :: proc(dirp: DIR) -> result ---
 
-	/*
-	Equivalent to the opendir() function except that the directory is specified by a file descriptor
-	rather than by a name.
-	The file offset associated with the file descriptor at the time of the call determines
-	which entries are returned.
+		/*
+		Equivalent to the opendir() function except that the directory is specified by a file descriptor
+		rather than by a name.
+		The file offset associated with the file descriptor at the time of the call determines
+		which entries are returned.
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fdopendir.html ]]
-	*/
-	@(link_name="fdopendir" + INODE_SUFFIX)
-	fdopendir :: proc(dirp: FD) -> DIR ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fdopendir.html ]]
+		*/
+		@(link_name="fdopendir" + INODE_SUFFIX)
+		fdopendir :: proc(dirp: FD) -> DIR ---
 
-	/*
-	Open a directory stream corresponding to the directory named by the dirname argument.
+		/*
+		Open a directory stream corresponding to the directory named by the dirname argument.
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fdopendir.html ]]
-	*/
-	@(link_name=LOPENDIR)
-	opendir :: proc(path: cstring) -> DIR ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fdopendir.html ]]
+		*/
+		@(link_name=LOPENDIR)
+		opendir :: proc(path: cstring) -> DIR ---
 
-	/*
-	Returns a pointer to a structure representing the directory entry at the current position
-	in the directory stream specified by the argument dirp, and position the directory stream at
-	the next entry.
+		/*
+		Returns a pointer to a structure representing the directory entry at the current position
+		in the directory stream specified by the argument dirp, and position the directory stream at
+		the next entry.
 
-	Returns nil when the end is reached or an error occurred (which sets errno).
+		Returns nil when the end is reached or an error occurred (which sets errno).
 
-	Example:
-		posix.set_errno(.NONE)
-		entry := posix.readdir(dirp)
-		if entry == nil {
-			if errno := posix.errno(); errno != .NONE {
-				panic(string(posix.strerror(errno)))
+		Example:
+			posix.set_errno(.NONE)
+			entry := posix.readdir(dirp)
+			if entry == nil {
+				if errno := posix.errno(); errno != .NONE {
+					panic(string(posix.strerror(errno)))
+				} else {
+					fmt.println("end of directory stream")
+				}
 			} else {
-				fmt.println("end of directory stream")
+				fmt.println(entry)
 			}
-		} else {
-			fmt.println(entry)
-		}
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/readdir.html ]]
-	*/
-	@(link_name=LREADDIR)
-	readdir :: proc(dirp: DIR) -> ^dirent ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/readdir.html ]]
+		*/
+		@(link_name=LREADDIR)
+		readdir :: proc(dirp: DIR) -> ^dirent ---
 
-	/*
-	Reset the position of the directory stream to which dirp refers to the beginning of the directory.
-	It shall also cause the directory stream to refer to the current state of the corresponding directory,
-	as a call to opendir() would have done. 
+		/*
+		Reset the position of the directory stream to which dirp refers to the beginning of the directory.
+		It shall also cause the directory stream to refer to the current state of the corresponding directory,
+		as a call to opendir() would have done. 
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/rewinddir.html ]]
-	*/
-	@(link_name="rewinddir" + INODE_SUFFIX)
-	rewinddir :: proc(dirp: DIR) ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/rewinddir.html ]]
+		*/
+		@(link_name="rewinddir" + INODE_SUFFIX)
+		rewinddir :: proc(dirp: DIR) ---
 
-	/*
-	The seekdir() function shall set the position of the next readdir() operation on the directory
-	stream specified by dirp to the position specified by loc.
+		/*
+		The seekdir() function shall set the position of the next readdir() operation on the directory
+		stream specified by dirp to the position specified by loc.
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/seekdir.html ]]
-	*/
-	@(link_name="seekdir" + INODE_SUFFIX)
-	seekdir :: proc(dirp: DIR, loc: dir_loc) ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/seekdir.html ]]
+		*/
+		@(link_name="seekdir" + INODE_SUFFIX)
+		seekdir :: proc(dirp: DIR, loc: dir_loc) ---
 
-	/*
-	The telldir() function shall obtain the current location associated with the directory stream
-	specified by dirp.
+		/*
+		The telldir() function shall obtain the current location associated with the directory stream
+		specified by dirp.
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/telldir.html ]]
-	*/
-	@(link_name="telldir" + INODE_SUFFIX)
-	telldir :: proc(dirp: DIR) -> dir_loc ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/telldir.html ]]
+		*/
+		@(link_name="telldir" + INODE_SUFFIX)
+		telldir :: proc(dirp: DIR) -> dir_loc ---
+	}
 
 	// deprecated.
 	// readdir_r :: proc(DIR, ^dirent, ^^dirent) -> c.int ---
@@ -174,13 +180,15 @@ when ODIN_OS == .NetBSD {
 	@(private) LOPENDIR   :: "opendir"   + INODE_SUFFIX
 	@(private) LREADDIR   :: "readdir"   + INODE_SUFFIX
 
-	foreign lib {
-		/*
-		Return a file descriptor referring to the same directory as the dirp argument.
+	when ODIN_OS != .Linux {
+		foreign lib {
+			/*
+			Return a file descriptor referring to the same directory as the dirp argument.
 
-		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/dirfd.html ]]
-		*/
-		dirfd :: proc(dirp: DIR) -> FD ---
+			[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/dirfd.html ]]
+			*/
+			dirfd :: proc(dirp: DIR) -> FD ---
+		}
 	}
 }
 

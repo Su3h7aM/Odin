@@ -10,13 +10,28 @@ EDOM   :: libc.EDOM
 EILSEQ :: libc.EILSEQ
 ERANGE :: libc.ERANGE
 
-@(no_instrumentation)
-get_errno :: #force_inline proc "contextless" () -> Errno {
-	return (^Errno)(libc.errno())^
-}
+when ODIN_OS == .Linux && ODIN_NO_CRT {
+	// Without libc there is no libc errno, so each thread keeps its own.
+	@(private="file", thread_local)
+	_errno: Errno
 
-set_errno :: #force_inline proc "contextless" (err: Errno) {
-	libc.errno()^ = i32(err)
+	@(no_instrumentation)
+	get_errno :: #force_inline proc "contextless" () -> Errno {
+		return _errno
+	}
+
+	set_errno :: #force_inline proc "contextless" (err: Errno) {
+		_errno = err
+	}
+} else {
+	@(no_instrumentation)
+	get_errno :: #force_inline proc "contextless" () -> Errno {
+		return (^Errno)(libc.errno())^
+	}
+
+	set_errno :: #force_inline proc "contextless" (err: Errno) {
+		libc.errno()^ = i32(err)
+	}
 }
 
 errno :: proc {

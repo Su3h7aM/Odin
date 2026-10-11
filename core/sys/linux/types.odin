@@ -384,6 +384,21 @@ MLock_Flags :: bit_set[MLock_Flags_Bits; u32]
 MSync_Flags :: bit_set[MSync_Flags_Bits; i32]
 
 /*
+	Mode for fallocate(2).
+*/
+Fallocate_Mode :: bit_set[Fallocate_Mode_Bits; i32]
+
+/*
+	Flags for preadv2(2) and pwritev2(2).
+*/
+RW_Flags :: bit_set[RW_Flags_Bits; i32]
+
+/*
+	Flags for sync_file_range(2).
+*/
+Sync_File_Range_Flags :: bit_set[Sync_File_Range_Flags_Bits; i32]
+
+/*
 	Access rights for pkey_alloc(2).
 */
 PKey_Access_Rights :: bit_set[PKey_Access_Bits; u32]
@@ -747,15 +762,41 @@ Sig_Action_Special :: enum uint {
 }
 
 Sig_Action_Flags :: bit_set[Sig_Action_Flag; uint]
-Sig_Action :: struct {
-	using _u: struct #raw_union {
-		handler: Sig_Handler_Fn,
-		sigaction: #type proc "c" (sig: Signal, si: ^Sig_Info, ctx: rawptr),
-		special: Sig_Action_Special,
-	},
-	flags: Sig_Action_Flags,
-	restorer: Sig_Restore_Fn,
-	mask: Sig_Set,
+
+@(private)
+Sig_Action_Handler :: struct #raw_union {
+	handler: Sig_Handler_Fn,
+	sigaction: #type proc "c" (sig: Signal, si: ^Sig_Info, ctx: rawptr),
+	special: Sig_Action_Special,
+}
+
+/*
+	The kernel's `struct sigaction` for `rt_sigaction`, which is not libc's.
+	The kernel declares the restorer only when its architecture defines
+	`SA_RESTORER`: asm-generic/signal.h, include/linux/signal_types.h and, for
+	the architectures with it, arch/<arch>/include/uapi/asm/signal.h. riscv64
+	does not, so it has no `restorer` field and the mask follows `flags` directly.
+	The layout agrees with musl's `k_sigaction`, src/internal/ksigaction.h.
+*/
+when ODIN_ARCH == .riscv64 {
+	Sig_Action :: struct {
+		using _u: Sig_Action_Handler,
+		flags: Sig_Action_Flags,
+		mask: Sig_Set,
+	}
+	#assert(size_of(Sig_Action) == 24)
+} else {
+	Sig_Action :: struct {
+		using _u: Sig_Action_Handler,
+		flags: Sig_Action_Flags,
+		restorer: Sig_Restore_Fn,
+		mask: Sig_Set,
+	}
+	when size_of(uint) == 8 {
+		#assert(size_of(Sig_Action) == 32) // amd64, arm64
+	} else {
+		#assert(size_of(Sig_Action) == 20) // i386, arm32
+	}
 }
 
 /*
@@ -943,6 +984,11 @@ IPC_Flags :: bit_set[IPC_Flags_Bits; i16]
 
 /*
 	Permissions for SystemV IPC primitives.
+
+	This is the kernel's `struct ipc64_perm` (asm-generic/ipcbuf.h), which every
+	supported architecture shares. The kernel's mode is 32 bits wide on 64-bit
+	architectures and 16 bits plus padding on i386, so the two bytes after
+	`mode` are padding either way.
 */
 IPC_Perm :: struct {
 	key:  Key,
@@ -951,12 +997,21 @@ IPC_Perm :: struct {
 	cuid: u32,
 	cgid: u32,
 	mode: IPC_Flags, // Only contains mode flags.
+	_:    u16,
 	seq:  u16,
-	_:    [2 + 2*size_of(int)]u8,
+	_:    u16,
+	_:    [2]uint,
 }
 
-when size_of(int) == 8 || ODIN_ARCH == .i386 {
-	// 32-bit and 64-bit x86, 64-bit arm
+when size_of(int) == 8 {
+	#assert(size_of(IPC_Perm) == 48)
+} else {
+	#assert(size_of(IPC_Perm) == 36)
+}
+
+// The kernel's `struct shmid64_ds`, asm-generic/shmbuf.h. It is the same on
+// every supported architecture, apart from the width of the times.
+when size_of(int) == 8 {
 	_Arch_Shmid_DS :: struct {
 		perm:   IPC_Perm,
 		segsz:  uint,
@@ -968,8 +1023,8 @@ when size_of(int) == 8 || ODIN_ARCH == .i386 {
 		nattch: uint,
 		_:      [2]uint,
 	}
+	#assert(size_of(_Arch_Shmid_DS) == 112)
 } else {
-	// Other 32-bit platforms
 	// NOTE(flysand): I'm not risking assuming it's little endian...
 	_Arch_Shmid_DS :: struct {
 		perm:       IPC_Perm,
@@ -982,9 +1037,10 @@ when size_of(int) == 8 || ODIN_ARCH == .i386 {
 		ctime_high: uint,
 		cpid:       Pid,
 		lpid:       Pid,
-		nattach:    uint,
+		nattch:     uint,
 		_:          [2]uint,
 	}
+	#assert(size_of(_Arch_Shmid_DS) == 84)
 }
 
 /*
@@ -1009,9 +1065,10 @@ Shm_Info :: struct {
 */
 Sem_Buf :: struct {
 	num: u16,
-	op:  IPC_Cmd,
+	op:  i16, // The amount to add to the semaphore, or zero to wait for zero.
 	flg: IPC_Flags,
 }
+#assert(size_of(Sem_Buf) == 6)
 
 when ODIN_ARCH == .i386 {
 	_Arch_Semid_DS :: struct {
@@ -1024,10 +1081,13 @@ when ODIN_ARCH == .i386 {
 		_:          [2]uint,
 	}
 } else when ODIN_ARCH == .amd64 {
+	// asm/sembuf.h pads each time with an unused word on x86-64.
 	_Arch_Semid_DS :: struct {
 		perm:       IPC_Perm,
 		otime:      int,
+		_:          uint,
 		ctime:      int,
+		_:          uint,
 		nsems:      uint,
 		_:          [2]uint,
 	}
@@ -1042,14 +1102,22 @@ when ODIN_ARCH == .i386 {
 		_:          [2]uint,
 	}
 } else when ODIN_ARCH == .arm64 || ODIN_ARCH == .riscv64 {
+	// asm-generic/sembuf.h
 	_Arch_Semid_DS :: struct {
 		perm:       IPC_Perm,
 		otime:      int,
 		ctime:      int,
-		sem_nsems:  uint,
-		__unused3:  uint,
-		__unused4:  uint,
+		nsems:      uint,
+		_:          [2]uint,
 	}
+}
+
+when ODIN_ARCH == .amd64 {
+	#assert(size_of(_Arch_Semid_DS) == 104)
+} else when size_of(int) == 8 {
+	#assert(size_of(_Arch_Semid_DS) == 88)
+} else {
+	#assert(size_of(_Arch_Semid_DS) == 64)
 }
 
 /*
@@ -1058,15 +1126,16 @@ when ODIN_ARCH == .i386 {
 Semid_DS :: _Arch_Semid_DS
 
 /*
-	Argument for semctl functions
+	Argument for semctl functions. The kernel takes it as a single word: `val`
+	for `SETVAL`, otherwise the pointer for the commands that have one.
 */
 Sem_Un :: struct #raw_union {
 	val:   i32,
-	buf:   rawptr,
-	array: u16,
-	__buf: Sem_Info,
-	_:     uintptr,
+	buf:   ^Semid_DS,
+	array: [^]u16,
+	__buf: ^Sem_Info,
 }
+#assert(size_of(Sem_Un) == size_of(uintptr))
 
 /*
 	SystenV semaphore info.
@@ -1095,17 +1164,38 @@ Msg_Buf :: struct {
 /*
 	SystemV message queue data.
 */
-Msqid_DS :: struct {
-	perm:   IPC_Perm,
-	stime:  uint,
-	rtime:  uint,
-	ctime:  uint,
-	cbytes: uint,
-	qnum:   uint,
-	qbytes: uint,
-	lspid:  Pid,
-	lrpid:  Pid,
-	_:      [2]uint,
+when size_of(int) == 8 {
+	// The kernel's `struct msqid64_ds`, asm-generic/msgbuf.h.
+	Msqid_DS :: struct {
+		perm:   IPC_Perm,
+		stime:  int,
+		rtime:  int,
+		ctime:  int,
+		cbytes: uint,
+		qnum:   uint,
+		qbytes: uint,
+		lspid:  Pid,
+		lrpid:  Pid,
+		_:      [2]uint,
+	}
+	#assert(size_of(Msqid_DS) == 120)
+} else {
+	Msqid_DS :: struct {
+		perm:       IPC_Perm,
+		stime:      uint,
+		stime_high: uint,
+		rtime:      uint,
+		rtime_high: uint,
+		ctime:      uint,
+		ctime_high: uint,
+		cbytes:     uint,
+		qnum:       uint,
+		qbytes:     uint,
+		lspid:      Pid,
+		lrpid:      Pid,
+		_:          [2]uint,
+	}
+	#assert(size_of(Msqid_DS) == 88)
 }
 
 /*
@@ -1751,6 +1841,61 @@ Swap_Flags :: bit_set[Swap_Flags_Bits; u32]
 
 Eventfd_Flags :: bit_set[Eventfd_Flags_Bits; i32]
 
+/*
+	Flags for signalfd4(2).
+*/
+Signal_Fd_Flags :: bit_set[Signal_Fd_Flags_Bits; i32]
+
+/*
+	The struct read from a signalfd file descriptor, `struct signalfd_siginfo`
+	in `linux/signalfd.h`.
+*/
+Signal_Fd_Info :: struct {
+	ssi_signo:    u32,
+	ssi_errno:    i32,
+	ssi_code:     i32,
+	ssi_pid:      u32,
+	ssi_uid:      u32,
+	ssi_fd:       i32,
+	ssi_tid:      u32,
+	ssi_band:     u32,
+	ssi_overrun:  u32,
+	ssi_trapno:   u32,
+	ssi_status:   i32,
+	ssi_int:      i32,
+	ssi_ptr:      u64,
+	ssi_utime:    u64,
+	ssi_stime:    u64,
+	ssi_addr:     u64,
+	ssi_addr_lsb: u16,
+	__pad2:       u16,
+	ssi_syscall:  i32,
+	ssi_call_addr: u64,
+	ssi_arch:     u32,
+	__pad:        [28]u8,
+}
+#assert(size_of(Signal_Fd_Info) == 128)
+
+/*
+	Plain storage for up to 1024 descriptors, `fd_set` in C.
+	Not the set type required by the pselect6 syscall, which takes raw bitmaps;
+	pass with `raw_data(set.bits[:])`.
+*/
+FD_Set :: struct {
+	bits: [1024 / (8 * size_of(uint))]uint,
+}
+#assert(size_of(FD_Set) == 128)
+
+/*
+	The final argument of the pselect6(2) syscall: a pointer to the signal
+	set and its size in bytes, since most architectures allow at most
+	6 arguments to a syscall.
+*/
+Pselect_Sigmask :: struct {
+	mask: ^Sig_Set,
+	size: uint,
+}
+
 Cpu_Set :: bit_set[0 ..< 128]
 
 Sched_Param :: struct {
@@ -1780,3 +1925,132 @@ Sched_Attr :: struct {
 Sched_Attr_Flags :: bit_set[Sched_Attr_Flag_Bits; u32]
 
 Memfd_Create_Flags :: bit_set[Memfd_Create_Flag_Bits; u32]
+
+/*
+	Resolve flags for openat2(2), `RESOLVE_*` in `linux/openat2.h`.
+*/
+Resolve_Flags :: bit_set[Resolve_Flags_Bits; u64]
+
+/*
+	Arguments for how openat2(2) should open the target path, `struct open_how`
+	in `linux/openat2.h`. This is `OPEN_HOW_SIZE_VER0`; `flags` and `mode`
+	behave like the `openat` arguments of the same names.
+	Open_Flags is a 32 bit bit_set, so convert it with
+	`u64(transmute(u32) flags)`; likewise `u64(transmute(u32) mode)` for Mode.
+*/
+Open_How :: struct {
+	flags:   u64,
+	mode:    u64,
+	resolve: Resolve_Flags,
+}
+#assert(size_of(Open_How) == 24)
+
+/*
+	A node in the per-thread robust futex list, `struct robust_list`
+	in `linux/futex.h`.
+*/
+Robust_List :: struct {
+	next: ^Robust_List,
+}
+
+/*
+	Head of the per-thread robust futex list, `struct robust_list_head`
+	in `linux/futex.h`. `futex_offset` is a C long.
+*/
+Robust_List_Head :: struct {
+	list:            Robust_List,
+	futex_offset:    int,
+	list_op_pending: ^Robust_List,
+}
+#assert(size_of(Robust_List_Head) == 3 * size_of(uintptr))
+
+/*
+	Arguments for the clone3(2) syscall, `struct clone_args`
+	in `linux/sched.h`. This is the full `CLONE_ARGS_SIZE_VER2` (88 bytes);
+	all fields are `u64`, including pointer-like fields (`pidfd`, `child_tid`,
+	`parent_tid`, `stack`, `tls`, `set_tid`), exactly as in the C struct.
+	There is no `Clone_Flags` bit set, so build `flags` as a raw `u64`
+	from the `CLONE_*` constants.
+*/
+Clone_Args :: struct {
+	flags:        u64,
+	pidfd:        u64,
+	child_tid:    u64,
+	parent_tid:   u64,
+	exit_signal:  u64,
+	stack:        u64,
+	stack_size:   u64,
+	tls:          u64,
+	set_tid:      u64,
+	set_tid_size: u64,
+	cgroup:       u64,
+}
+#assert(size_of(Clone_Args) == 88)
+
+/*
+	Flags for the rseq(2) syscall, `RSEQ_FLAG_*` in `linux/rseq.h`.
+*/
+Rseq_Flags :: bit_set[Rseq_Flags_Bits; i32]
+
+/*
+	Restartable sequence area, `struct rseq` in `linux/rseq.h`.
+	This covers the original 32 byte area (`cpu_id_start` through `mm_cid`)
+	plus `slice_ctrl` and the `__reserved` byte, which the header added to
+	bump the rseq feature size from 32 to 33. The 32 byte alignment pads
+	the size to 64 bytes.
+*/
+Rseq :: struct #align(32) {
+	cpu_id_start: u32,
+	cpu_id:       u32,
+	rseq_cs:      u64,
+	flags:        u32,
+	node_id:      u32,
+	mm_cid:       u32,
+	slice_ctrl:   u32,
+	reserved:     u8,
+}
+#assert(size_of(Rseq) == 64)
+
+/*
+	Terminal attributes, `struct termios` in `asm-generic/termbits.h`.
+	Argument to the TCGETS/TCSETS/TCSETSW/TCSETSF ioctls.
+	Field names drop the header's `c_` prefix, as `Stat` and `Dirent` do.
+*/
+Termios :: struct {
+	iflag: u32,
+	oflag: u32,
+	cflag: u32,
+	lflag: u32,
+	line:  u8,
+	cc:    [NCCS]u8,
+}
+#assert(size_of(Termios) == 36)
+
+/*
+	Extended terminal attributes, `struct termios2` in `asm-generic/termbits.h`.
+	Argument to the TCGETS2/TCSETS2/TCSETSW2/TCSETSF2 ioctls. Same layout as
+	`Termios` with numeric input and output baud rates appended.
+*/
+Termios2 :: struct {
+	iflag:  u32,
+	oflag:  u32,
+	cflag:  u32,
+	lflag:  u32,
+	line:   u8,
+	cc:     [NCCS]u8,
+	ispeed: u32,
+	ospeed: u32,
+}
+#assert(size_of(Termios2) == 44)
+
+/*
+	Window size, `struct winsize` in `linux/termios.h`.
+	Argument to the TIOCGWINSZ/TIOCSWINSZ ioctls.
+*/
+Winsize :: struct {
+	row:    u16,
+	col:    u16,
+	xpixel: u16,
+	ypixel: u16,
+}
+#assert(size_of(Winsize) == 8)

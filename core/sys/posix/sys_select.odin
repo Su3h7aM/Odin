@@ -7,7 +7,7 @@ import "core:c"
 
 when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
-} else {
+} else when ODIN_OS != .Linux || size_of(rawptr) == 4 {
 	foreign import lib "system:c"
 }
 
@@ -22,15 +22,17 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/pselect.html ]]
 	*/
-	@(link_name=LPSELECT)
-	pselect :: proc(
-		nfds:     c.int,
-		readfds:  ^fd_set,
-		writefds: ^fd_set,
-		errorfds: ^fd_set,
-		timeout:  ^timespec,
-		sigmask:  ^sigset_t,
-	) -> c.int ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LPSELECT)
+		pselect :: proc(
+			nfds:     c.int,
+			readfds:  ^fd_set,
+			writefds: ^fd_set,
+			errorfds: ^fd_set,
+			timeout:  ^timespec,
+			sigmask:  ^sigset_t,
+		) -> c.int ---
+	}
 
 	/*
 	Equivalent to pselect() except a more specific timeout resolution (nanoseconds), 
@@ -38,14 +40,16 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/pselect.html ]]
 	*/
-	@(link_name=LSELECT)
-	select :: proc(
-		nfds:     c.int,
-		readfds:  ^fd_set,
-		writefds: ^fd_set,
-		errorfds: ^fd_set,
-		timeout:  ^timeval,
-	) -> c.int ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LSELECT)
+		select :: proc(
+			nfds:     c.int,
+			readfds:  ^fd_set,
+			writefds: ^fd_set,
+			errorfds: ^fd_set,
+			timeout:  ^timeval,
+		) -> c.int ---
+	}
 }
 
 when ODIN_OS == .NetBSD {

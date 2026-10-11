@@ -5,13 +5,14 @@ import "core:c"
 
 when ODIN_OS == .Darwin {
 	foreign import libc "system:System"
-} else {
+} else when ODIN_OS != .Linux {
 	foreign import libc "system:c"
 }
 
 // sys/uio.h - definitions for vector I/O operations
 
 foreign libc {
+	when ODIN_OS != .Linux {
 	/*
 	Equivalent to read() but takes a vector of inputs.
 
@@ -19,7 +20,7 @@ foreign libc {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/readv.html ]]
 	*/
-	readv  :: proc(fildes: FD, iov: [^]iovec, iovcnt: c.int) -> c.ssize_t ---
+		readv  :: proc(fildes: FD, iov: [^]iovec, iovcnt: c.int) -> c.ssize_t ---
 
 	/*
 	Equivalent to write() but takes a vector of inputs.
@@ -28,7 +29,8 @@ foreign libc {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/readv.html ]]
 	*/
-	writev :: proc(fildes: FD, iov: [^]iovec, iovcnt: c.int) -> c.ssize_t ---
+		writev :: proc(fildes: FD, iov: [^]iovec, iovcnt: c.int) -> c.ssize_t ---
+	}
 }
 
 when ODIN_OS == .Darwin || ODIN_OS == .FreeBSD || ODIN_OS == .NetBSD || ODIN_OS == .OpenBSD || ODIN_OS == .Linux {

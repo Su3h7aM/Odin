@@ -2082,7 +2082,10 @@ when VIRTUAL_MEMORY_SUPPORTED {
 	//
 	// Note that this will not run for the main thread, as no thread-local
 	// cleaner procedures do.
-	@(private="file", no_sanitize_address)
+	// Package-visible (not file-private): the managed key destructor's
+	// drain step calls this directly for a heap re-acquired after the
+	// pass, without touching registration or completion state.
+	@(private, no_sanitize_address)
 	heap_local_cleanup :: proc "odin" () {
 		if local_heap == nil {
 			// A thread without a heap could not have caused any dynamic memory
@@ -2120,9 +2123,16 @@ when VIRTUAL_MEMORY_SUPPORTED {
 		local_heap = nil
 	}
 
+	// Register the heap cleaner through the same idempotent helper the
+	// first-acquisition path uses, so exactly one slot exists no matter
+	// which runs first.
 	@(init, private="file")
 	init_orphanage :: proc "contextless" () {
-		add_thread_local_cleaner(heap_local_cleanup)
+		when ODIN_OS == .Linux && (!ODIN_NO_CRT || ODIN_ARCH == .amd64) {
+			_managed_thread_cleanup_reactivate(heap_local_cleanup)
+		} else {
+			add_thread_local_cleaner(heap_local_cleanup)
+		}
 	}
 }
 
@@ -2216,10 +2226,26 @@ pointer never becomes safe to use through reuse.
 heap_alloc :: proc "contextless" (size: int, zero_memory: bool = true) -> (ptr: rawptr) {
 	// Initialize the heap if needed.
 	if intrinsics.expect(local_heap == nil, false) {
+		when ODIN_OS == .Linux && !ODIN_NO_CRT {
+			// Arm before acquiring: a thread cancelled between acquiring
+			// and arming would otherwise hold a heap no cleanup is bound
+			// to. Fails fast with a static diagnostic; the error cannot
+			// propagate through the allocator interface.
+			_managed_thread_cleanup_ensure_or_die()
+		}
 		local_heap = heap_acquire()
 		if intrinsics.expect(local_heap == nil, false) {
 			// The operating system may be out of memory.
 			return nil
+		}
+		// Ensure the heap cleaner is registered (idempotent: first
+		// acquisition may precede package init on loader-phase threads)
+		// and, on Linux-managed builds, mark it uncompleted so a
+		// reacquired heap is released again at the next cleanup.
+		// Protected profiles only: every other profile keeps init-time
+		// registration as the sole path, with no lazy publication.
+		when ODIN_OS == .Linux && (!ODIN_NO_CRT || ODIN_ARCH == .amd64) {
+			_managed_thread_cleanup_reactivate(heap_local_cleanup)
 		}
 	}
 

@@ -14,44 +14,61 @@ when ODIN_OS == .Windows {
 	foreign import lib "system:c"
 }
 
+_ :: c
+_ :: lib
+
 // stdlib.h - standard library definitions
 
 atof          :: libc.atof
-atoi          :: libc.atoi
-atol          :: libc.atol
-atoll         :: libc.atoll
 strtod        :: libc.strtod
 strtof        :: libc.strtof
-strtol        :: libc.strtol
-strtoll       :: libc.strtoll
-strtoul       :: libc.strtoul
-strtoull      :: libc.strtoull
 
-rand          :: libc.rand
-srand         :: libc.srand
+// Linux noCRT takes the owned integer conversions in
+// stdlib_integer_linux.odin. Every other profile keeps the libc aliases,
+// where conversions share the C locale with linked code.
+when ODIN_OS != .Linux || !ODIN_NO_CRT {
+	atoi     :: libc.atoi
+	atol     :: libc.atol
+	atoll    :: libc.atoll
+	strtol   :: libc.strtol
+	strtoll  :: libc.strtoll
+	strtoul  :: libc.strtoul
+	strtoull :: libc.strtoull
+}
 
-calloc        :: libc.calloc
-malloc        :: libc.malloc
-realloc       :: libc.realloc
+// Linux noCRT takes the owned generator in stdlib_linux.odin. Every other
+// profile keeps the libc aliases, where C code shares the generator state.
+when ODIN_OS != .Linux || !ODIN_NO_CRT {
+	rand     :: libc.rand
+	srand    :: libc.srand
+}
+
+// Linux noCRT takes the owned heap implementations in stdlib_linux.odin.
+// Every other profile keeps the libc aliases, so linked C code can free
+// what these procedures return and vice versa.
+when ODIN_OS != .Linux || !ODIN_NO_CRT {
+	calloc    :: libc.calloc
+	malloc    :: libc.malloc
+	realloc   :: libc.realloc
+}
 
 abort         :: libc.abort
 atexit        :: libc.atexit
 at_quick_exit :: libc.at_quick_exit
 exit          :: libc.exit
 _Exit         :: libc._Exit
-getenv        :: libc.getenv
+when ODIN_OS != .Linux || !ODIN_NO_CRT {
+	getenv :: libc.getenv
+}
 quick_exit    :: libc.quick_exit
 system        :: libc.system
 
-bsearch       :: libc.bsearch
-qsort         :: libc.qsort
-
-abs           :: libc.abs
-labs          :: libc.labs
-llabs         :: libc.llabs
-div           :: libc.div
-ldiv          :: libc.ldiv
-lldiv         :: libc.lldiv
+// Linux uses the owned search and sort in stdlib_linux.odin on both
+// profiles; these need no libc state. Every other OS keeps the aliases.
+when ODIN_OS != .Linux {
+	bsearch  :: libc.bsearch
+	qsort    :: libc.qsort
+}
 
 mblen         :: libc.mblen
 mbtowc        :: libc.mbtowc
@@ -60,8 +77,13 @@ wctomb        :: libc.wctomb
 mbstowcs      :: libc.mbstowcs
 wcstombs      :: libc.wcstombs
 
+// Linux noCRT frees through the owned heap in stdlib_linux.odin.
 free :: #force_inline proc "c" (ptr: $T) where intrinsics.type_is_pointer(T) || intrinsics.type_is_multi_pointer(T) || T == cstring {
-	libc.free(rawptr(ptr))
+	when ODIN_OS == .Linux && ODIN_NO_CRT {
+		_native_free(rawptr(ptr))
+	} else {
+		libc.free(rawptr(ptr))
+	}
 }
 
 foreign lib {
@@ -78,8 +100,10 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/putenv.html ]]
 	*/
-	@(link_name=LPUTENV)
-	putenv :: proc(string: cstring) -> c.int ---
+	when ODIN_OS != .Linux || !ODIN_NO_CRT {
+		@(link_name=LPUTENV)
+		putenv :: proc(string: cstring) -> c.int ---
+	}
 }
 
 EXIT_FAILURE :: libc.EXIT_FAILURE

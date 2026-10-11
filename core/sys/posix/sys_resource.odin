@@ -6,7 +6,9 @@ import "core:c"
 when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
 } else {
-	foreign import lib "system:c"
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		foreign import lib "system:c"
+	}
 }
 
 // sys/resource.h - definitions XSI resource operations
@@ -30,36 +32,46 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getpriority.html ]]
 	*/
-	getpriority :: proc(which: Which_Prio, who: id_t) -> c.int ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		getpriority :: proc(which: Which_Prio, who: id_t) -> c.int ---
+	}
 
 	/*
 	Sets the nice value of the process, process group or user given.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getpriority.html ]]
 	*/
-	setpriority :: proc(which: Which_Prio, who: id_t, value: c.int) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		setpriority :: proc(which: Which_Prio, who: id_t, value: c.int) -> result ---
+	}
 
 	/*
 	Get a resource limit.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getrlimit.html ]]
 	*/
-	getrlimit :: proc(resource: Resource, rlp: ^rlimit) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		getrlimit :: proc(resource: Resource, rlp: ^rlimit) -> result ---
+	}
 
 	/*
 	Set a resource limit.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getrlimit.html ]]
 	*/
-	setrlimit :: proc(resource: Resource, rlp: ^rlimit) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		setrlimit :: proc(resource: Resource, rlp: ^rlimit) -> result ---
+	}
 
 	/*
 	Get resource usage.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getrusage.html ]]
 	*/
-	@(link_name=LGETRUSAGE)
-	getrusage :: proc(who: Which_Usage, rusage: ^rusage) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LGETRUSAGE)
+		getrusage :: proc(who: Which_Usage, rusage: ^rusage) -> result ---
+	}
 }
 
 Which_Prio :: enum c.int {

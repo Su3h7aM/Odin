@@ -129,7 +129,13 @@ gb_internal void lb_add_foreign_library_path(lbModule *m, Entity *e) {
 	}
 	GB_ASSERT(e->kind == Entity_LibraryName);
 	GB_ASSERT(e->flags & EntityFlag_Used);
-
+	if (e->flags & EntityFlag_OwnedSatisfied) {
+		// Owned-first selection proved every reachable reference to this
+		// system library resolves without libc; passing it would re-link
+		// what selection just removed. File and .asm imports never carry
+		// the flag, so entry stubs and user objects flow unchanged.
+		return;
+	}
 	mutex_lock(&m->gen->foreign_mutex);
 	if (!ptr_set_update(&m->gen->foreign_libraries_set, e)) {
 		array_add(&m->gen->foreign_libraries, e);
@@ -183,6 +189,9 @@ gb_internal void lb_set_entity_from_other_modules_linkage_correctly(lbModule *ot
 	if (other_module == nullptr) {
 		return;
 	}
+	if (e->kind == Entity_Variable && e->Variable.link_name_owner) {
+		e = e->Variable.link_name_owner;
+	}
 	char const *cname = alloc_cstring(permanent_allocator(), name);
 	mpsc_enqueue(&other_module->gen->entities_to_correct_linkage, lbEntityCorrection{other_module, e, cname});
 }
@@ -193,7 +202,9 @@ gb_internal void lb_correct_entity_linkage(lbGenerator *gen) {
 		if (ec.e->kind == Entity_Variable) {
 			other_global = LLVMGetNamedGlobal(ec.other_module->mod, ec.cname);
 			if (other_global && !LLVMIsDeclaration(other_global)) {
-				LLVM_SET_INTERNAL_WEAK_LINKAGE(other_global);
+				if (!ec.e->Variable.is_export) {
+					LLVM_SET_INTERNAL_WEAK_LINKAGE(other_global);
+				}
 				if (!ec.e->Variable.is_export && !ec.e->Variable.is_foreign) {
 					LLVMSetVisibility(other_global, LLVMHiddenVisibility);
 				}
@@ -2270,7 +2281,8 @@ gb_internal void lb_verify_function(lbModule *m, lbProcedure *p, bool dump_ll=fa
 			gb_printf_err("\n\n\n");
 			String filepath_ll = lb_filepath_ll_for_module(m);
 			if (LLVMPrintModuleToFile(m->mod, cast(char const *)filepath_ll.text, &llvm_error)) {
-				gb_printf_err("LLVM Error: %s\n", llvm_error);
+				gb_printf_err("Failed to write LLVM IR for module '%s' to '%.*s': %s\n", m->module_name, LIT(filepath_ll), llvm_error);
+				LLVMDisposeMessage(llvm_error);
 			}
 		}
 		LLVMVerifyFunction(p->value, LLVMPrintMessageAction);
@@ -2294,7 +2306,7 @@ gb_internal WORKER_TASK_PROC(lb_llvm_module_verification_worker_proc) {
 			TIME_SECTION("LLVM Print Module to File");
 			String filepath_ll = lb_filepath_ll_for_module(m);
 			if (LLVMPrintModuleToFile(m->mod, cast(char const *)filepath_ll.text, &llvm_error)) {
-				gb_printf_err("LLVM Error: %s\n", llvm_error);
+				gb_printf_err("Failed to write LLVM IR for module '%s' to '%.*s': %s\n", m->module_name, LIT(filepath_ll), llvm_error);
 				lb_record_worker_failure();
 				return 1;
 			}
@@ -2394,18 +2406,117 @@ gb_internal bool lb_global_variable_has_constant_init(Entity *e, DeclInfo *decl)
 	return is_type_untyped_nil(tav.type);
 }
 
+gb_internal void lb_add_global_variable_debug_info(lbModule *m, Entity *e, LLVMValueRef global) {
+	if (m->debug_builder) {
+		String global_name = e->token.string;
+		if (global_name.len != 0 && global_name != "_") {
+			gbString name = gb_string_make(heap_allocator(), "");
+			defer (gb_string_free(name));
+			if (e->Variable.is_foreign || e->Variable.is_export || (e->flags & EntityFlag_CustomLinkName)) {
+				size_t link_name_len = 0;
+				char const *link_name = LLVMGetValueName2(global, &link_name_len);
+				name = gb_string_append_length(name, link_name, link_name_len);
+			} else {
+				if (e->file != nullptr) {
+					name = lb_debug_append_name_prefix(name, e->file, e);
+				}
+				name = gb_string_append_length(name, global_name.text, global_name.len);
+			}
+			global_name = make_string(cast(u8 *)name, gb_string_length(name));
+
+			LLVMMetadataRef llvm_file = lb_get_file_metadata(m, e->file);
+			LLVMMetadataRef llvm_scope = llvm_file;
+
+			LLVMBool local_to_unit = LLVMGetLinkage(global) == LLVMInternalLinkage;
+
+			LLVMMetadataRef llvm_expr = LLVMDIBuilderCreateExpression(m->debug_builder, nullptr, 0);
+			LLVMMetadataRef llvm_decl = nullptr;
+
+			u32 align_in_bits = cast(u32)(8*type_align_of(e->type));
+
+			LLVMMetadataRef global_variable_metadata = LLVMDIBuilderCreateGlobalVariableExpression(
+				m->debug_builder, llvm_scope,
+				cast(char const *)global_name.text, global_name.len,
+				"", 0, // linkage
+				llvm_file, e->token.pos.line,
+				lb_debug_type(m, e->type),
+				local_to_unit,
+				llvm_expr,
+				llvm_decl,
+				align_in_bits
+			);
+			lb_set_llvm_metadata(m, global, global_variable_metadata);
+			LLVMGlobalSetMetadata(global, 0, global_variable_metadata);
+		}
+	}
+
+}
+
+// Each declaration has its own typed view of the checked group's storage.
+// The registry stores raw globals so a foreign view cannot replace the owner.
+gb_internal lbValue lb_find_linked_global(lbModule *m, Entity *e) {
+	Entity *owner = e->Variable.link_name_owner;
+	GB_ASSERT(owner != nullptr);
+	LLVMValueRef global = nullptr;
+	if (auto *found = map_get(&m->linked_globals, owner)) {
+		global = *found;
+	} else {
+		lbModule *owner_module = lb_module_of_entity(m->gen, owner, m);
+		GB_ASSERT(owner->Variable.is_foreign || owner_module != m);
+		String name = lb_get_entity_name(owner_module, owner);
+		global = LLVMAddGlobal(m->mod, lb_type(m, owner->type), alloc_cstring(permanent_allocator(), name));
+		map_set(&m->linked_globals, owner, global);
+		LLVMSetLinkage(global, LLVMExternalLinkage);
+		lb_apply_thread_local_model(global, owner->Variable.thread_local_model);
+		LLVMSetAlignment(global, cast(u32)owner->Variable.link_name_align);
+		if (owner->flags & EntityFlag_Require) {
+			lb_append_to_compiler_used(m, global);
+		}
+		if (owner->Variable.is_foreign) {
+			LLVMSetDLLStorageClass(global, LLVMDLLImportStorageClass);
+			LLVMSetExternallyInitialized(global, true);
+			LLVMSetGlobalConstant(global, owner->Variable.is_rodata);
+			if (owner->Variable.is_export) {
+				LLVMSetLinkage(global, LLVMDLLExportLinkage);
+				LLVMSetDLLStorageClass(global, LLVMDLLExportStorageClass);
+			}
+			lb_set_linkage_from_entity_flags(m, global, owner->flags);
+			if (owner->Variable.link_section.len > 0) {
+				LLVMSetSection(global, alloc_cstring(permanent_allocator(), owner->Variable.link_section));
+			}
+			lb_add_global_variable_debug_info(m, owner, global);
+		} else {
+			lb_set_entity_from_other_modules_linkage_correctly(owner_module, owner, name);
+		}
+		lbValue storage = {};
+		storage.type = alloc_type_pointer(owner->type);
+		storage.value = LLVMConstPointerCast(global, lb_type(m, storage.type));
+		lb_add_member(m, name, storage);
+	}
+	lbValue g = {};
+	g.type = alloc_type_pointer(e->type);
+	g.value = LLVMConstPointerCast(global, lb_type(m, g.type));
+	lb_add_entity(m, e, g);
+	return g;
+}
+
 gb_internal void lb_create_global_variable(lbModule *m, lbGlobalVariable *var) {
 	DeclInfo *decl = var->decl;
 	Entity *e = decl->entity;
 
 	bool is_foreign = e->Variable.is_foreign;
 	bool is_export  = e->Variable.is_export;
+	if (is_foreign && e->Variable.link_name_owner) {
+		var->var = lb_find_linked_global(m, e);
+		lb_add_foreign_library_path(m, e->Variable.foreign_library);
+		return;
+	}
 
 	String name = lb_get_entity_name(m, e);
 
 	lbValue g = {};
 	g.type = alloc_type_pointer(e->type);
-	g.value = LLVMAddGlobal(m->mod, lb_type(m, e->type), alloc_cstring(permanent_allocator(), name));
+	LLVMValueRef initializer = nullptr;
 
 	if (decl->init_expr != nullptr) {
 		TypeAndValue tav = type_and_value_of_expr(decl->init_expr);
@@ -2419,26 +2530,26 @@ gb_internal void lb_create_global_variable(lbModule *m, lbGlobalVariable *var) {
 
 					ExactValue v = tav.value;
 					lbValue init = lb_const_value(m, e->type, v, cc);
-
-					LLVMDeleteGlobal(g.value);
-					g.value = nullptr;
-					g.value = LLVMAddGlobal(m->mod, LLVMTypeOf(init.value), alloc_cstring(permanent_allocator(), name));
-
-					LLVMSetInitializer(g.value, init.value);
+					initializer = init.value;
 					var->is_initialized = true;
-					if (cc.is_rodata) {
-						LLVMSetGlobalConstant(g.value, true);
-					}
 				}
 			}
 		}
 		if (!var->is_initialized && is_type_untyped_nil(tav.type)) {
 			var->is_initialized = true;
-			if (e->kind == Entity_Variable && e->Variable.is_rodata) {
-				LLVMSetGlobalConstant(g.value, true);
-			}
 		}
-	} else if (e->kind == Entity_Variable && e->Variable.is_rodata) {
+	}
+	LLVMTypeRef storage_type = initializer ? LLVMTypeOf(initializer) : lb_type(m, e->type);
+	g.value = LLVMAddGlobal(m->mod, storage_type, alloc_cstring(permanent_allocator(), name));
+	if (e->Variable.link_name_owner) {
+		GB_ASSERT(e->Variable.link_name_owner == e);
+		GB_ASSERT(map_get(&m->linked_globals, e) == nullptr);
+		map_set(&m->linked_globals, e, g.value);
+	}
+	if (initializer) {
+		LLVMSetInitializer(g.value, initializer);
+	}
+	if (e->Variable.is_rodata) {
 		LLVMSetGlobalConstant(g.value, true);
 	}
 
@@ -2459,7 +2570,7 @@ gb_internal void lb_create_global_variable(lbModule *m, lbGlobalVariable *var) {
 		LLVM_SET_INTERNAL_WEAK_LINKAGE(g.value);
 	}
 	lb_set_linkage_from_entity_flags(m, g.value, e->flags);
-	LLVMSetAlignment(g.value, cast(u32)gb_max(type_align_of(e->type), e->Variable.custom_align));
+	LLVMSetAlignment(g.value, cast(u32)gb_max(gb_max(type_align_of(e->type), e->Variable.custom_align), e->Variable.link_name_align));
 
 	if (e->Variable.link_section.len > 0) {
 		LLVMSetSection(g.value, alloc_cstring(permanent_allocator(), e->Variable.link_section));
@@ -2468,48 +2579,7 @@ gb_internal void lb_create_global_variable(lbModule *m, lbGlobalVariable *var) {
 		lb_append_to_compiler_used(m, g.value);
 	}
 
-	if (m->debug_builder) {
-		String global_name = e->token.string;
-		if (global_name.len != 0 && global_name != "_") {
-			gbString name = gb_string_make(heap_allocator(), "");
-			defer (gb_string_free(name));
-			if (e->Variable.is_foreign || e->Variable.is_export || (e->flags & EntityFlag_CustomLinkName)) {
-				size_t link_name_len = 0;
-				char const *link_name = LLVMGetValueName2(g.value, &link_name_len);
-				name = gb_string_append_length(name, link_name, link_name_len);
-			} else {
-				if (e->file != nullptr) {
-					name = lb_debug_append_name_prefix(name, e->file, e);
-				}
-				name = gb_string_append_length(name, global_name.text, global_name.len);
-			}
-			global_name = make_string(cast(u8 *)name, gb_string_length(name));
-
-			LLVMMetadataRef llvm_file = lb_get_file_metadata(m, e->file);
-			LLVMMetadataRef llvm_scope = llvm_file;
-
-			LLVMBool local_to_unit = LLVMGetLinkage(g.value) == LLVMInternalLinkage;
-
-			LLVMMetadataRef llvm_expr = LLVMDIBuilderCreateExpression(m->debug_builder, nullptr, 0);
-			LLVMMetadataRef llvm_decl = nullptr;
-
-			u32 align_in_bits = cast(u32)(8*type_align_of(e->type));
-
-			LLVMMetadataRef global_variable_metadata = LLVMDIBuilderCreateGlobalVariableExpression(
-				m->debug_builder, llvm_scope,
-				cast(char const *)global_name.text, global_name.len,
-				"", 0, // linkage
-				llvm_file, e->token.pos.line,
-				lb_debug_type(m, e->type),
-				local_to_unit,
-				llvm_expr,
-				llvm_decl,
-				align_in_bits
-			);
-			lb_set_llvm_metadata(m, g.value, global_variable_metadata);
-			LLVMGlobalSetMetadata(g.value, 0, global_variable_metadata);
-		}
-	}
+	lb_add_global_variable_debug_info(m, e, g.value);
 
 	g.value = LLVMConstPointerCast(g.value, lb_type(m, alloc_type_pointer(e->type)));
 	var->var = g;
@@ -2603,7 +2673,17 @@ gb_internal lbProcedure *lb_create_startup_runtime(lbModule *main_module, lbProc
 	return p;
 }
 
+// Provider selection interface, file scope so every emission site shares one
+// envelope. True for explicitly selected owned-track static Linux amd64
+// executables; every other configuration takes the managed interop track.
+gb_internal bool lb_owned_native_provider() {
+	return build_context.no_crt &&
+		build_context.metrics.os == TargetOs_linux && build_context.metrics.arch == TargetArch_amd64 &&
+		build_context.build_mode != BuildMode_DynamicLibrary;
+}
+
 gb_internal lbProcedure *lb_create_cleanup_runtime(lbModule *main_module) { // Cleanup Runtime
+	bool owned_provider = lb_owned_native_provider();
 	Type *proc_type = alloc_type_proc(nullptr, nullptr, 0, nullptr, 0, false, ProcCC_Odin);
 
 	lbProcedure *p = lb_create_dummy_procedure(main_module, str_lit(LB_CLEANUP_RUNTIME_PROC_NAME), proc_type);
@@ -2622,9 +2702,35 @@ gb_internal lbProcedure *lb_create_cleanup_runtime(lbModule *main_module) { // C
 
 	CheckerInfo *info = main_module->gen->info;
 
+	// On Linux amd64 without the C runtime, the final atomic drain and close
+	// must run after user finalizers but before runtime-owned teardown such
+	// as the builtin temporary allocator destroy, so late handlers still see
+	// live runtime services. Partition base:runtime finalizers last with the
+	// drain and close between the two groups; every other target keeps the
+	// single loop and identical output.
+	bool lifecycle_split = owned_provider;
+	AstPackage *rt_pkg = lifecycle_split ? get_runtime_package(main_module->info) : nullptr;
 	for (Entity *e : info->fini_procedures) {
+		if (lifecycle_split && e->pkg == rt_pkg) {
+			continue;
+		}
 		lbValue value = lb_find_procedure_value_from_entity(main_module, e);
 		lb_emit_call(p, value, {}, ProcInlining_none, ProcTailing_none);
+	}
+	if (lifecycle_split) {
+		Entity *drain_e = scope_lookup_current(rt_pkg->scope, string_interner_insert(str_lit("drain_and_close_atexit")));
+		if (drain_e == nullptr || drain_e->kind != Entity_Procedure) {
+			compiler_error("Could not find procedure declaration for 'runtime.drain_and_close_atexit'\n");
+		}
+		lbValue drain_value = lb_find_procedure_value_from_entity(main_module, drain_e);
+		lb_emit_call(p, drain_value, {}, ProcInlining_none, ProcTailing_none);
+		for (Entity *e : info->fini_procedures) {
+			if (e->pkg != rt_pkg) {
+				continue;
+			}
+			lbValue value = lb_find_procedure_value_from_entity(main_module, e);
+			lb_emit_call(p, value, {}, ProcInlining_none, ProcTailing_none);
+		}
 	}
 
 	lb_end_procedure_body(p);
@@ -2803,7 +2909,9 @@ gb_internal WORKER_TASK_PROC(lb_llvm_emit_worker_proc) {
 			return 1;
 		}
 	} else if (LLVMTargetMachineEmitToFile(wd->target_machine, wd->m->mod, cast(char *)wd->filepath_obj.text, wd->code_gen_file_type, &llvm_error)) {
-		gb_printf_err("LLVM Error: %s\n", llvm_error);
+		char const *stage = wd->code_gen_file_type == LLVMAssemblyFile ? "assembly" : "object";
+		gb_printf_err("Failed to emit %s file for module '%s' to '%.*s': LLVM error: %s\n", stage, wd->m->module_name, LIT(wd->filepath_obj), llvm_error);
+		LLVMDisposeMessage(llvm_error);
 		lb_record_worker_failure();
 		return 1;
 	}
@@ -2980,7 +3088,7 @@ gb_internal WORKER_TASK_PROC(lb_llvm_module_pass_worker_proc) {
 			TIME_SECTION("LLVM Print Module to File");
 			String filepath_ll = lb_filepath_ll_for_module(wd->m);
 			if (LLVMPrintModuleToFile(wd->m->mod, cast(char const *)filepath_ll.text, &llvm_error)) {
-				gb_printf_err("LLVM Error: %s\n", llvm_error);
+				gb_printf_err("Failed to write LLVM IR for module '%s' to '%.*s': %s\n", wd->m->module_name, LIT(filepath_ll), llvm_error);
 			}
 		}
 		lb_record_worker_failure();
@@ -3039,8 +3147,19 @@ gb_internal i64 lb_module_cost(lbModule *m) {
 
 gb_internal WORKER_TASK_PROC(lb_generate_procedures_worker_proc) {
 	lbModule *m = cast(lbModule *)data;
+	// Allocate definitions before foreign views without changing the startup
+	// initialization order already recorded in global_init_procedures.
 	for (lbGlobalVariable *var : m->global_variables) {
-		lb_create_global_variable(m, var);
+		Entity *e = var->decl->entity;
+		if (!e->Variable.is_foreign) {
+			lb_create_global_variable(m, var);
+		}
+	}
+	for (lbGlobalVariable *var : m->global_variables) {
+		Entity *e = var->decl->entity;
+		if (e->Variable.is_foreign) {
+			lb_create_global_variable(m, var);
+		}
 	}
 	if (m == &m->gen->default_module || m->type_info_members != nullptr) {
 		lb_setup_type_info_data(m);
@@ -3322,7 +3441,8 @@ gb_internal bool lb_llvm_object_generation(lbGenerator *gen, bool do_threading) 
 					return false;
 				}
 			} else if (LLVMTargetMachineEmitToFile(m->target_machine, m->mod, cast(char *)filepath_obj.text, code_gen_file_type, &llvm_error)) {
-				gb_printf_err("LLVM Error: %s\n", llvm_error);
+				char const *stage = code_gen_file_type == LLVMAssemblyFile ? "assembly" : "object";
+				gb_printf_err("Failed to emit %s file for module '%s' to '%.*s': LLVM error: %s\n", stage, m->module_name, LIT(filepath_obj), llvm_error);
 				exit_with_errors();
 				return false;
 			}
@@ -3337,6 +3457,63 @@ gb_internal bool lb_llvm_object_generation(lbGenerator *gen, bool do_threading) 
 gb_internal lbProcedure *lb_create_main_procedure(lbModule *m, lbProcedure *startup_runtime, lbProcedure *cleanup_runtime) {
 	LLVMPassManagerRef default_function_pass_manager = LLVMCreateFunctionPassManagerForModule(m->mod);
 	LLVMFinalizeFunctionPassManager(default_function_pass_manager);
+
+	// Shared global-definition helper: a recorded value can be a mere
+	// external declaration left by an earlier reference, which never emits
+	// storage. Only a real definition counts; a hollow declaration in the
+	// home module is filled in place since a second global would collide
+	// and be renamed aside.
+	auto ensure_lifecycle_global_entity = [&](Entity *e) {
+		lbModule *home = lb_module_of_entity(m->gen, e, m);
+		rw_mutex_shared_lock(&home->values_mutex);
+		lbValue *existing = map_get(&home->values, e);
+		bool defined = existing != nullptr && !LLVMIsDeclaration(existing->value);
+		rw_mutex_shared_unlock(&home->values_mutex);
+		if (!defined && existing != nullptr) {
+			LLVMSetInitializer(existing->value, LLVMConstNull(lb_type(home, e->type)));
+			LLVM_SET_INTERNAL_WEAK_LINKAGE(existing->value);
+			LLVMSetAlignment(existing->value, cast(u32)gb_max(gb_max(type_align_of(e->type), e->Variable.custom_align), e->Variable.link_name_align));
+			lb_apply_thread_local_model(existing->value, e->Variable.thread_local_model);
+		} else if (!defined) {
+			lbGlobalVariable *var = permanent_alloc_item<lbGlobalVariable>();
+			var->decl = decl_info_of_entity(e);
+			lb_create_global_variable(home, var);
+		}
+	};
+	// The generated test entry below references runtime helpers that nothing
+	// else calls, so they may never have been queued for generation, which the
+	// parallel phase already finished. Create them in their home module and
+	// queue their bodies; the queued generation phase after main creation
+	// emits them.
+	auto ensure_lifecycle_proc = [&](String name) -> lbValue {
+		AstPackage *rt_pkg = get_runtime_package(m->info);
+		Entity *e = scope_lookup_current(rt_pkg->scope, string_interner_insert(name));
+		if (e == nullptr || e->kind != Entity_Procedure) {
+			compiler_error("Could not find procedure declaration for 'runtime.%.*s'\n", LIT(name));
+		}
+		lbModule *home = lb_module_of_entity(m->gen, e, m);
+		rw_mutex_shared_lock(&home->values_mutex);
+		bool found = map_get(&home->values, e) != nullptr;
+		rw_mutex_shared_unlock(&home->values_mutex);
+		if (!found) {
+			lbProcedure *proc = lb_create_procedure(home, e, false);
+			if (proc != nullptr) {
+				mpsc_enqueue(&home->procedures_to_generate, proc);
+			}
+		}
+		return lb_find_procedure_value_from_entity(m, e);
+	};
+	// File-private registry state referenced only from the procs above is
+	// never queued by normal generation, so define it here directly. Global
+	// creation emits storage immediately rather than queueing a body.
+	auto ensure_lifecycle_global = [&](String name) {
+		AstPackage *rt_pkg = get_runtime_package(m->info);
+		Entity *e = scope_lookup_current(rt_pkg->scope, string_interner_insert(name));
+		if (e == nullptr || e->kind != Entity_Variable) {
+			compiler_error("Could not find variable declaration for 'runtime.%.*s'\n", LIT(name));
+		}
+		ensure_lifecycle_global_entity(e);
+	};
 
 	Type *params  = alloc_type_tuple();
 	Type *results = alloc_type_tuple();
@@ -3373,6 +3550,10 @@ gb_internal lbProcedure *lb_create_main_procedure(lbModule *m, lbProcedure *star
 		slice_init(&params->Tuple.variables, permanent_allocator(), 2);
 		params->Tuple.variables[0] = alloc_entity_param(nullptr, make_token_ident("argc"), t_i32, false, true);
 		params->Tuple.variables[1] = alloc_entity_param(nullptr, make_token_ident("argv"), t_ptr_cstring, false, true);
+		if (build_context.command_kind == Command_test && linux_no_crt_tls()) {
+			// The assembly entry installs TLS before the generated test runner.
+			name = str_lit("_start_odin");
+		}
 	}
 
 	slice_init(&results->Tuple.variables, permanent_allocator(), 1);
@@ -3399,6 +3580,48 @@ gb_internal lbProcedure *lb_create_main_procedure(lbModule *m, lbProcedure *star
 	}
 
 	lbValue startup_runtime_value = {startup_runtime->value, startup_runtime->type};
+	if (build_context.command_kind == Command_test && lb_owned_native_provider()) {
+		// noCRT test binaries share the normal static lifecycle: publish the
+		// inherited environment and run C constructors before Odin startup.
+		// The runtime helpers only exist for this target, matching the gate.
+		AstPackage *rt_pkg = get_runtime_package(m->info);
+		// Owned thread and credential startup runs before environ
+		// publication and all constructors, shared with _start_odin through
+		// the same helper. The helper is rooted pre-parallel through
+		// checked declaration dependencies, so its transitive callees and
+		// globals generate normally; only the call value is ensured here.
+		lbValue bootstrap_v = ensure_lifecycle_proc(str_lit("_owned_startup_bootstrap"));
+		lb_emit_call(p, bootstrap_v, {}, ProcInlining_none, ProcTailing_none);
+		lbValue argc_v = {LLVMGetParam(p->value, 0), t_i32};
+		lbValue argv_v = {LLVMGetParam(p->value, 1), t_ptr_cstring};
+		lbValue argc_plus_one = lb_emit_arith(p, Token_Add, lb_emit_conv(p, argc_v, t_int), lb_const_int(m, t_int, 1), t_int);
+		lbValue envp_v = {LLVMBuildInBoundsGEP2(p->builder, lb_type(m, t_cstring), argv_v.value, &argc_plus_one.value, 1, ""), t_ptr_cstring};
+
+		Entity *environ_e = scope_lookup_current(rt_pkg->scope, string_interner_insert(str_lit("environ")));
+		if (environ_e == nullptr) {
+			compiler_error("Could not find type declaration for 'runtime.environ'\n");
+		}
+		lbValue environ_v = lb_find_value_from_entity(m, environ_e);
+		lb_addr_store(p, lb_addr(environ_v), lb_emit_conv(p, envp_v, environ_e->type));
+		Entity *published_e = scope_lookup_current(rt_pkg->scope, string_interner_insert(str_lit("environ_published")));
+		if (published_e == nullptr) {
+			compiler_error("Could not find type declaration for 'runtime.environ_published'\n");
+		}
+		lbValue published_v = lb_find_value_from_entity(m, published_e);
+		lb_addr_store(p, lb_addr(published_v), lb_const_bool(m, t_bool, true));
+
+		lbValue init_v = ensure_lifecycle_proc(str_lit("run_c_init_arrays"));
+		auto init_args = array_make<lbValue>(permanent_allocator(), 0, 3);
+		array_add(&init_args, argc_v);
+		array_add(&init_args, argv_v);
+		array_add(&init_args, envp_v);
+		lb_emit_call(p, init_v, init_args, ProcInlining_none, ProcTailing_none);
+		ensure_lifecycle_global(str_lit("_atexit_lock"));
+		ensure_lifecycle_global(str_lit("_atexit_fns"));
+		ensure_lifecycle_global(str_lit("_atexit_n"));
+		ensure_lifecycle_global(str_lit("_draining"));
+		ensure_lifecycle_global(str_lit("_closed"));
+	}
 	lb_emit_call(p, startup_runtime_value, {}, ProcInlining_none, ProcTailing_none);
 
 	if (build_context.command_kind == Command_test) {
@@ -3451,6 +3674,19 @@ gb_internal lbProcedure *lb_create_main_procedure(lbModule *m, lbProcedure *star
 		auto args = array_make<lbValue>(temporary_allocator(), 1);
 		args[0] = lb_addr_load(p, all_tests_slice);
 		lbValue result = lb_emit_call(p, runner, args);
+
+		if (build_context.command_kind == Command_test && lb_owned_native_provider()) {
+			// Drain handlers, run C destructors in reverse, then drain again
+			// for handlers registered during finalization, before the test
+			// exit code below, closing the registry on the final pass.
+			// Odin cleanup never ran on this path.
+			lbValue drain_v = ensure_lifecycle_proc(str_lit("drain_atexit"));
+			lbValue fini_v = ensure_lifecycle_proc(str_lit("run_c_fini_arrays"));
+			lbValue close_v = ensure_lifecycle_proc(str_lit("drain_and_close_atexit"));
+			lb_emit_call(p, drain_v, {}, ProcInlining_none, ProcTailing_none);
+			lb_emit_call(p, fini_v, {}, ProcInlining_none, ProcTailing_none);
+			lb_emit_call(p, close_v, {}, ProcInlining_none, ProcTailing_none);
+		}
 
 		lbValue exit_runner = {};
 		{
@@ -4201,7 +4437,7 @@ gb_internal bool lb_generate_code(lbGenerator *gen) {
 			}
 			String filepath_ll = lb_filepath_ll_for_module(m);
 			if (LLVMPrintModuleToFile(m->mod, cast(char const *)filepath_ll.text, &llvm_error)) {
-				gb_printf_err("LLVM Error: %s\n", llvm_error);
+				gb_printf_err("Failed to write LLVM IR for module '%s' to '%.*s': %s\n", m->module_name, LIT(filepath_ll), llvm_error);
 				exit_with_errors();
 				return false;
 			}

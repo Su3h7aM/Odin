@@ -1281,9 +1281,85 @@ gb_internal GB_COMPARE_PROC(link_name_use_cmp) {
 	}
 	return 0;
 }
-gb_internal void check_link_name_uses(Checker *c) {
+gb_internal void check_link_name_uses(Checker *c, bool resolve_variables = false) {
 	auto &uses = c->info.link_names;
 	array_sort(uses, link_name_use_cmp);
+
+	// A definition may follow any number of foreign declarations. Resolve the
+	// entire group rather than using its first declaration as the storage owner.
+	for (isize begin = 0; !build_context.workspace && begin < uses.count; /**/) {
+		isize end = begin+1;
+		while (end < uses.count && uses[end].name == uses[begin].name) {
+			end++;
+		}
+		Entity *owner = nullptr;
+		Entity *variable = nullptr;
+		bool has_procedure = false;
+		Entity *procedure_definition = nullptr;
+		i64 alignment = 0;
+		for (isize i = begin; i < end; i++) {
+			Entity *e = uses[i].entity;
+			if (e->kind != Entity_Variable) {
+				has_procedure = true;
+				if (!e->Procedure.is_foreign) {
+					procedure_definition = e;
+				}
+				continue;
+			}
+			variable = e;
+			if (e->type && e->type != t_invalid) {
+				alignment = gb_max(alignment, gb_max(type_align_of(e->type), e->Variable.custom_align));
+			}
+			if (!e->Variable.is_foreign) {
+				if (owner && owner != e) {
+					if (!resolve_variables) {
+						error(e->token, "Multiple definitions of linking name '%.*s'\n\tat %s",
+						      LIT(uses[i].name), token_pos_to_string(owner->token.pos));
+					}
+				} else {
+					owner = e;
+				}
+			}
+		}
+		if (!resolve_variables && variable && has_procedure && (owner || procedure_definition)) {
+			error(variable->token, "Non-unique linking name '%.*s' shared by a variable and a procedure", LIT(uses[begin].name));
+		}
+		if (variable && !has_procedure) {
+			if (!owner) {
+				owner = uses[begin].entity;
+			}
+			for (isize i = begin; i < end; i++) {
+				Entity *e = uses[i].entity;
+				if (!resolve_variables && (e->Variable.thread_local_model.len != 0) != (owner->Variable.thread_local_model.len != 0)) {
+					error(e->token, "Redeclaration of linking name '%.*s' with different thread-local storage", LIT(uses[i].name));
+				}
+				for (isize j = begin; !resolve_variables && j < i; j++) {
+					Entity *f = uses[j].entity;
+					if (e != f && e->type && f->type && e->type != t_invalid && f->type != t_invalid &&
+					    !signature_parameter_similar_enough(base_type(e->type), base_type(f->type))) {
+						error(e->token, "Foreign entity '%.*s' previously declared elsewhere with a different type\n\tat %s",
+						      LIT(uses[i].name), token_pos_to_string(f->token.pos));
+					}
+				}
+				// Only checked file-scope variable groups participate in LLVM sharing.
+				if (resolve_variables && (e->scope->flags & ScopeFlag_File) && (owner->scope->flags & ScopeFlag_File)) {
+					e->Variable.link_name_owner = owner;
+					e->Variable.link_name_align = alignment;
+					if (e->flags & EntityFlag_Require) {
+						owner->flags |= EntityFlag_Require;
+					}
+					if (e != owner && !owner->Variable.is_foreign) {
+						add_dependency(&c->info, uses[i].decl, owner);
+					}
+				}
+			}
+		}
+		begin = end;
+	}
+
+	if (resolve_variables) {
+		return;
+	}
 
 	LinkNameUse *first = nullptr;
 	for (isize i = 0; i < uses.count; i++) {
@@ -1341,6 +1417,9 @@ gb_internal void check_link_name_uses(Checker *c) {
 			      LIT(name), token_pos_to_string(pos));
 			break;
 		case LinkNameUse_Variable:
+			if (e->Variable.link_name_owner && f->kind == Entity_Variable) {
+				break;
+			}
 			if (e->type == nullptr || f->type == nullptr || !signature_parameter_similar_enough(this_type, other_type)) {
 				error(e->token,
 				      "Foreign entity '%.*s' previously declared elsewhere with a different type\n"
@@ -1719,6 +1798,8 @@ gb_internal void check_proc_decl(CheckerContext *ctx, Entity *e, DeclInfo *d) {
 		e->Procedure.link_name = ln;
 		if (ln == "memcpy" ||
 		    ln == "memmove" ||
+		    ln == "memset" ||
+		    ln == "bzero" ||
 		    ln == "mem_copy" ||
 		    ln == "mem_copy_non_overlapping") {
 			e->Procedure.is_memcpy_like = true;
@@ -1843,7 +1924,7 @@ gb_internal void check_global_variable_decl(CheckerContext *ctx, Entity *e, Ast 
 		e->Variable.link_section = ac.link_section;
 	}
 
-	if (e->Variable.is_foreign || e->Variable.is_export) {
+	if (e->Variable.is_foreign || e->Variable.is_export || e->Variable.link_name.len > 0) {
 		String name = e->token.string;
 		if (e->Variable.link_name.len > 0) {
 			name = e->Variable.link_name;

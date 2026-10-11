@@ -3,23 +3,26 @@ package posix
 
 import "core:c"
 
-when ODIN_OS == .Darwin {
-	foreign import lib "system:System"
-} else {
-	foreign import lib "system:c"
-}
+// The Linux implementation is in sys_ipc_linux.odin.
+when ODIN_OS != .Linux {
+	when ODIN_OS == .Darwin {
+		foreign import lib "system:System"
+	} else {
+		foreign import lib "system:c"
+	}
 
-// sys/ipc.h = XSI interprocess communication access structure
+	// sys/ipc.h = XSI interprocess communication access structure
 
-foreign lib {
-	/*
-	Generate an IPC key.
+	foreign lib {
+		/*
+		Generate an IPC key.
 
-	Returns: -1 (setting errno) on failure, the key otherwise
+		Returns: -1 (setting errno) on failure, the key otherwise
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/ftok.html ]]
-	*/
-	ftok :: proc(path: cstring, id: c.int) -> key_t ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/ftok.html ]]
+		*/
+		ftok :: proc(path: cstring, id: c.int) -> key_t ---
+	}
 }
 
 IPC_Cmd :: enum c.int {

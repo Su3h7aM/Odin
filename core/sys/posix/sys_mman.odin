@@ -3,108 +3,111 @@ package posix
 
 import "core:c"
 
-when ODIN_OS == .Darwin {
-	foreign import lib "system:System"
-} else {
-	foreign import lib "system:c"
-}
-
-// mman.h - memory management declarations
-
-foreign lib {
-	/*
-	Establish a mapping between an address space of a process and a memory object.
-
-	Returns: MAP_FAILED (setting errno) on failure, the address in memory otherwise
-
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mmap.html ]]
-	*/
-	mmap :: proc(
-		addr:  rawptr,
-		len:   c.size_t,
-		prot:  Prot_Flags,
-		flags: Map_Flags,
-		fd:    FD    = -1,
-		off:   off_t = 0,
-	) -> rawptr ---
-
-	/*
-	Unmaps pages of memory.
-
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/munmap.html ]]
-	*/
-	munmap :: proc(addr: rawptr, len: c.size_t) -> result ---
-
-	/*
-	Locks a range of the process address space.
-
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mlock.html ]]
-	*/
-	mlock :: proc(addr: rawptr, len: c.size_t) -> result ---
-
-	/*
-	Unlocks a range of the process address space.
-
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mlock.html ]]
-	*/
-	munlock :: proc(addr: rawptr, len: c.size_t) -> result ---
-
-	/*
-	Locks all pages of the process address space.
-
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mlockall.html ]]
-	*/
-	mlockall :: proc(flags: Lock_Flags) -> result ---
-
-	/*
-	Unlocks all pages of the process address space.
-
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mlockall.html ]]
-	*/
-	munlockall :: proc() -> result ---
-
-	/*
-	Set protection of a memory mapping.
-
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mprotect.html ]]
-	*/
-	mprotect :: proc(addr: rawptr, len: c.size_t, prot: Prot_Flags) -> result ---
-
-	/*
-	Write all modified data to permanent storage locations.
-
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/msync.html ]]
-	*/
-	@(link_name=LMSYNC)
-	msync :: proc(addr: rawptr, len: c.size_t, flags: Sync_Flags) -> result ---
-
-	/*
-	Advise the implementation of expected behavior of the application.
-
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_madvise.html ]]
-	*/
-	posix_madvise :: proc(addr: rawptr, len: c.size_t, advice: MAdvice) -> Errno ---
-
-	/*
-	Open a shared memory object.
-
-	Returns: -1 (setting errno) on failure, an open file descriptor otherwise
-
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/shm_open.html ]]
-	*/
+// The Linux implementation is in sys_mman_linux.odin.
+when ODIN_OS != .Linux {
 	when ODIN_OS == .Darwin {
-		// https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/shm_open.2.html
-		shm_open :: proc(name: cstring, oflag: O_Flags, #c_vararg args: ..any) -> FD ---
+		foreign import lib "system:System"
 	} else {
-		shm_open :: proc(name: cstring, oflag: O_Flags, mode: mode_t) -> FD ---
+		foreign import lib "system:c"
 	}
 
-	/*
-	Removes a shared memory object.
+	// mman.h - memory management declarations
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/shm_unlink.html ]]
-	*/
-	shm_unlink :: proc(name: cstring) -> result ---
+	foreign lib {
+		/*
+		Establish a mapping between an address space of a process and a memory object.
+
+		Returns: MAP_FAILED (setting errno) on failure, the address in memory otherwise
+
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mmap.html ]]
+		*/
+		mmap :: proc(
+			addr:  rawptr,
+			len:   c.size_t,
+			prot:  Prot_Flags,
+			flags: Map_Flags,
+			fd:    FD    = -1,
+			off:   off_t = 0,
+		) -> rawptr ---
+
+		/*
+		Unmaps pages of memory.
+
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/munmap.html ]]
+		*/
+		munmap :: proc(addr: rawptr, len: c.size_t) -> result ---
+
+		/*
+		Locks a range of the process address space.
+
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mlock.html ]]
+		*/
+		mlock :: proc(addr: rawptr, len: c.size_t) -> result ---
+
+		/*
+		Unlocks a range of the process address space.
+
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mlock.html ]]
+		*/
+		munlock :: proc(addr: rawptr, len: c.size_t) -> result ---
+
+		/*
+		Locks all pages of the process address space.
+
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mlockall.html ]]
+		*/
+		mlockall :: proc(flags: Lock_Flags) -> result ---
+
+		/*
+		Unlocks all pages of the process address space.
+
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mlockall.html ]]
+		*/
+		munlockall :: proc() -> result ---
+
+		/*
+		Set protection of a memory mapping.
+
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mprotect.html ]]
+		*/
+		mprotect :: proc(addr: rawptr, len: c.size_t, prot: Prot_Flags) -> result ---
+
+		/*
+		Write all modified data to permanent storage locations.
+
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/msync.html ]]
+		*/
+		@(link_name=LMSYNC)
+		msync :: proc(addr: rawptr, len: c.size_t, flags: Sync_Flags) -> result ---
+
+		/*
+		Advise the implementation of expected behavior of the application.
+
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_madvise.html ]]
+		*/
+		posix_madvise :: proc(addr: rawptr, len: c.size_t, advice: MAdvice) -> Errno ---
+
+		/*
+		Open a shared memory object.
+
+		Returns: -1 (setting errno) on failure, an open file descriptor otherwise
+
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/shm_open.html ]]
+		*/
+		when ODIN_OS == .Darwin {
+			// https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/shm_open.2.html
+			shm_open :: proc(name: cstring, oflag: O_Flags, #c_vararg args: ..any) -> FD ---
+		} else {
+			shm_open :: proc(name: cstring, oflag: O_Flags, mode: mode_t) -> FD ---
+		}
+
+		/*
+		Removes a shared memory object.
+
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/shm_unlink.html ]]
+		*/
+		shm_unlink :: proc(name: cstring) -> result ---
+	}
 }
 
 #assert(_PROT_NONE == 0)
@@ -183,9 +186,12 @@ when ODIN_OS == .Darwin || ODIN_OS == .NetBSD || ODIN_OS == .OpenBSD || ODIN_OS 
 	MAP_SHARED    :: 0x0001
 	MAP_ANONYMOUS :: 0x0020 when ODIN_OS == .Linux else 0x1000
 
-	when ODIN_OS == .Darwin || ODIN_OS == .Linux {
+	when ODIN_OS == .Darwin {
 		MS_INVALIDATE :: 0x0002
 		_MS_SYNC      :: 0x0010
+	} else when ODIN_OS == .Linux {
+		MS_INVALIDATE :: 0x0002
+		_MS_SYNC      :: 0x0004
 	} else when ODIN_OS == .NetBSD {
 		MS_INVALIDATE :: 0x0002
 		_MS_SYNC      :: 0x0004

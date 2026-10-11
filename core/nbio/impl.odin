@@ -13,13 +13,24 @@ import "core:time"
 
 @(init, private)
 init_thread_local_cleaner :: proc "contextless" () {
-	runtime.add_thread_local_cleaner(proc() {
-		l := &_tls_event_loop
-		if l.refs > 0 {
-			l.refs = 1
-			_release_thread_event_loop()
-		}
-	})
+	// Same idempotent helper the first-acquisition path uses: exactly one
+	// slot no matter which runs first.
+	when ODIN_OS == .Linux && (!ODIN_NO_CRT || ODIN_ARCH == .amd64) {
+		runtime._managed_thread_cleanup_reactivate(release_thread_event_loop_cleaner)
+	} else {
+		runtime.add_thread_local_cleaner(release_thread_event_loop_cleaner)
+	}
+}
+
+// Named (not anonymous) so resource reacquisition can match its registry
+// slot and clear the cleaner's per-thread completion bit.
+@(private)
+release_thread_event_loop_cleaner :: proc() {
+	l := &_tls_event_loop
+	if l.refs > 0 {
+		l.refs = 1
+		_release_thread_event_loop()
+	}
 }
 
 @(thread_local)
@@ -28,6 +39,12 @@ _tls_event_loop: Event_Loop
 _acquire_thread_event_loop :: proc() -> General_Error {
 	l := &_tls_event_loop
 	if l.err == nil && l.refs == 0 {
+		when ODIN_OS == .Linux && !ODIN_NO_CRT {
+			// Fresh or post-cleanup acquisition: the cleaner must run
+			// again at the next cleanup, so clear its completion bit.
+			// The refs==0 gate keeps this off the hot nested-acquire path.
+			runtime._managed_thread_cleanup_reactivate(release_thread_event_loop_cleaner)
+		}
 		when ODIN_ARCH == .wasm32 || ODIN_ARCH == .wasm64p32 && ODIN_OS != .Orca {
 			allocator := runtime.default_wasm_allocator()
 		} else {

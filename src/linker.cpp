@@ -132,6 +132,271 @@ gb_internal void linker_data_init(LinkerData *ld, CheckerInfo *info, String cons
 
 }
 
+// Owned-link section-bound contract for provider selection: under a
+// static non-PIE Linux executable link driven below, the toolchain
+// materializes the C constructor/destructor array bounds below on
+// reference, leaving start equal to end when the section is absent.
+// The shipped lifecycle (base/runtime lifecycle_linux_amd64.odin,
+// ODIN_NO_CRT-gated) walks these as possibly-empty ranges and never
+// loads through a bound. This predicate names the linker's synthesis
+// interface relied upon by that shipped contract; it is not a list of
+// supplied symbols. If the toolchain stops providing any of them,
+// owned programs fail loudly at link and the owned-suite tripwires
+// catch it there.
+gb_internal bool owned_link_synthesizes_init_array_bounds(String link_name) {
+	// Verified per selected linker: GNU ld (default script PROVIDE_HIDDEN
+	// when referenced), lld (synthetic start/end symbols), and mold
+	// (synthetic symbols) all materialize these under static non-PIE
+	// executable links. Any other linker choice is unproven here.
+	// Custom scripts, response files, and symbol injections void this
+	// contract separately at the flag/token layer, which forces managed
+	// before this predicate can matter to a final verdict.
+	bool linker_known = build_context.linker_choice == Linker_Default ||
+	                    build_context.linker_choice == Linker_lld ||
+	                    build_context.linker_choice == Linker_mold;
+	if (!linker_known) {
+		return false;
+	}
+	return link_name == str_lit("__preinit_array_start") ||
+	       link_name == str_lit("__preinit_array_end") ||
+	       link_name == str_lit("__init_array_start") ||
+	       link_name == str_lit("__init_array_end") ||
+	       link_name == str_lit("__fini_array_start") ||
+	       link_name == str_lit("__fini_array_end");
+}
+
+// Verified assembler objects, keyed by canonical input path. Provider
+// selection assembles reachable .asm inputs to prove their symbol
+// closure from authoritative object metadata; the final link reuses
+// those exact objects rather than reassembling, so proof and link can
+// never observe different bytes, tool versions, or include state.
+struct LinkerVerifiedAsm {
+	String input;
+	String obj_path;
+	bool proven;
+};
+
+gb_internal Array<LinkerVerifiedAsm> *linker_verified_asm_map(void) {
+	gb_local_persist Array<LinkerVerifiedAsm> map = {};
+	return &map;
+}
+
+gb_internal String *linker_verified_asm_dir_slot(void) {
+	gb_local_persist String dir = {};
+	return &dir;
+}
+
+gb_internal void linker_verified_asm_set_dir(String dir) {
+	String *slot = linker_verified_asm_dir_slot();
+	if (slot->len == 0) {
+		*slot = dir;
+	}
+}
+
+gb_internal String linker_verified_asm_lookup(String input) {
+	Array<LinkerVerifiedAsm> *map = linker_verified_asm_map();
+	for (LinkerVerifiedAsm const &v : *map) {
+		// Only fully proven objects are reused; failed assemblies stay
+		// tracked for cleanup but never feed the link.
+		if (v.input == input && v.proven) {
+			return v.obj_path;
+		}
+	}
+	return {};
+}
+
+gb_internal bool linker_verified_asm_has(String input) {
+	Array<LinkerVerifiedAsm> *map = linker_verified_asm_map();
+	for (LinkerVerifiedAsm const &v : *map) {
+		if (v.input == input) {
+			return true;
+		}
+	}
+	return false;
+}
+
+gb_internal void linker_verified_asm_record(String input, String obj_path, bool proven) {
+	Array<LinkerVerifiedAsm> *map = linker_verified_asm_map();
+	if (map->allocator.proc == nullptr) {
+		array_init(map, heap_allocator(), 0, 8);
+	}
+	for (LinkerVerifiedAsm &v : *map) {
+		if (v.input == input) {
+			v.obj_path = obj_path;
+			v.proven = proven;
+			return;
+		}
+	}
+	LinkerVerifiedAsm v = {input, obj_path, proven};
+	array_add(map, v);
+}
+
+// Removes proof-assembled objects on every outcome unless object files
+// are kept, mirroring the linked-object lifecycle below.
+gb_internal void linker_verified_asm_cleanup(void) {
+	if (build_context.keep_object_files) {
+		return;
+	}
+	switch (build_context.build_mode) {
+	case BuildMode_Executable:
+	case BuildMode_StaticLibrary:
+	case BuildMode_DynamicLibrary:
+		break;
+	default:
+		return;
+	}
+	Array<LinkerVerifiedAsm> *map = linker_verified_asm_map();
+	for (LinkerVerifiedAsm const &v : *map) {
+		if (v.obj_path.len != 0) {
+			char *p = alloc_cstring(heap_allocator(), v.obj_path);
+			gb_file_remove(p);
+			gb_free(heap_allocator(), p);
+		}
+	}
+	map->count = 0;
+	String *dir_slot = linker_verified_asm_dir_slot();
+	if (dir_slot->len != 0) {
+		char *p = alloc_cstring(heap_allocator(), *dir_slot);
+#if defined(GB_SYSTEM_WINDOWS)
+		RemoveDirectoryA(p);
+#else
+		rmdir(p);
+#endif
+		gb_free(heap_allocator(), p);
+		dir_slot->len = 0;
+	}
+}
+
+// Assembles one asm input with the exact configuration the final link
+// uses. Shared by the link stage and provider-selection proof so the
+// two can never disagree on tool, format, flags, or search paths.
+// Returns 0 on success.
+gb_internal i32 linker_assemble_asm_input(String asm_file, String obj_file) {
+	i32 result = 0;
+	bool is_osx = build_context.metrics.os == TargetOs_darwin;
+	String obj_format;
+	if (build_context.metrics.ptr_size == 8) {
+		if (is_osx) {
+			obj_format = str_lit("macho64");
+		} else {
+			obj_format = str_lit("elf64");
+		}
+	} else {
+		GB_ASSERT(build_context.metrics.ptr_size == 4);
+		if (is_osx) {
+			obj_format = str_lit("macho32");
+		} else {
+			obj_format = str_lit("elf32");
+		}
+	}
+
+	// Mark assembled objects as not requiring an executable stack,
+	// the musl -Wa,--noexecstack approach. The flag forms differ
+	// per assembler driver, and NASM offers no equivalent switch
+	// (x86 sources carry an in-source .note.GNU-stack section
+	// instead), so only the clang and GNU as paths take one here.
+	// Mach-O and COFF targets are excluded: their assemblers do
+	// not accept this ELF note flag.
+	String clang_noexecstack_flag = {};
+	String as_noexecstack_flag = {};
+	if (build_context.metrics.os == TargetOs_linux) {
+		clang_noexecstack_flag = str_lit("-Wa,--noexecstack");
+		as_noexecstack_flag = str_lit("--noexecstack");
+	}
+	const char *clang_path = gb_get_env("ODIN_CLANG_PATH", permanent_allocator());
+	if (clang_path == nullptr) {
+		clang_path = "clang";
+	}
+
+	if (build_context.metrics.arch == TargetArch_riscv64) {
+		result = system_exec_command_line_app("clang",
+			"%s \"%.*s\" "
+			"-c -o \"%.*s\" "
+			"-target %.*s -march=rv64gc "
+			"%.*s "
+			"%.*s "
+			"",
+			clang_path,
+			LIT(asm_file),
+			LIT(obj_file),
+			LIT(build_context.metrics.target_triplet),
+			LIT(clang_noexecstack_flag),
+			LIT(build_context.extra_assembler_flags)
+		);
+	} else if (is_osx || (!is_arch_x86() && build_context.metrics.arch != TargetArch_arm64)) {
+		// `as` comes with MacOS.
+		result = system_exec_command_line_app("as",
+			"as \"%.*s\" "
+			"-o \"%.*s\" "
+			"%.*s "
+			"%.*s "
+			"",
+			LIT(asm_file),
+			LIT(obj_file),
+			LIT(as_noexecstack_flag),
+			LIT(build_context.extra_assembler_flags)
+		);
+	} else if (build_context.metrics.arch == TargetArch_arm64) {
+		result = system_exec_command_line_app("clang",
+			"%s \"%.*s\" "
+			"-c -o \"%.*s\" "
+			"-target %.*s "
+			"%.*s "
+			"%.*s "
+			"",
+			clang_path,
+			LIT(asm_file),
+			LIT(obj_file),
+			LIT(build_context.metrics.target_triplet),
+			LIT(clang_noexecstack_flag),
+			LIT(build_context.extra_assembler_flags)
+		);
+	} else {
+		// `nasm` only compiles x86 assembly.
+		// Note(bumbread): I'm assuming nasm is installed on the host machine.
+		// Shipping binaries on unix-likes gets into the weird territorry of
+		// "which version of glibc" is it linked with.
+		//
+		// NASM offers no --noexecstack switch, so ELF targets mark
+		// objects centrally with --before, which prepends the same
+		// .note.GNU-stack section directive every x86 source
+		// already carries. A source that keeps its own note is
+		// unaffected: NASM merges the identical declaration into
+		// a single section. A second --before restores section
+		// .text immediately after, so sources that rely on NASM's
+		// default section keep emitting code into allocatable
+		// .text instead of the note. Mach-O targets are excluded.
+		// Limited to Linux targets: BSD and Windows objects keep
+		// their exact previous invocation.
+		String nasm_noexecstack_flag = {};
+		if (build_context.metrics.os == TargetOs_linux) {
+			nasm_noexecstack_flag = str_lit("--before \"section .note.GNU-stack noalloc noexec nowrite progbits\" --before \"section .text\"");
+		}
+		const char *nasm_path = gb_get_env("ODIN_NASM_PATH", permanent_allocator());
+		if (nasm_path == nullptr) {
+			nasm_path = "nasm";
+		}
+		result = system_exec_command_line_app("nasm",
+			"\"%s\" \"%.*s\" "
+			"-f \"%.*s\" "
+			"-o \"%.*s\" "
+			"%.*s "
+			"%.*s "
+			"",
+			nasm_path,
+			LIT(asm_file),
+			LIT(obj_format),
+			LIT(obj_file),
+			LIT(nasm_noexecstack_flag),
+			LIT(build_context.extra_assembler_flags)
+		);
+		if (result) {
+			gb_printf_err("executing `nasm` to assemble foreing import of %.*s failed.\n\tSuggestion: `nasm` does not ship with the compiler and should be installed with your system's package manager.\n", LIT(asm_file));
+		}
+	}
+	return result;
+}
+
 gb_internal i32 linker_stage(LinkerData *gen) {
 	i32 result = 0;
 	Timings *timings = &global_timings;
@@ -672,97 +937,35 @@ try_cross_linking:;
 							continue; // already handled
 						}
 						String asm_file = lib;
-						String obj_file = {};
-
-						String temp_dir = temporary_directory(temporary_allocator());
-						if (temp_dir.len != 0) {
-							String filename = filename_without_directory(asm_file);
-
-							gbString str = gb_string_make(heap_allocator(), "");
-							str = gb_string_append_length(str, temp_dir.text, temp_dir.len);
-							str = gb_string_appendc(str, "/");
-							str = gb_string_append_length(str, filename.text, filename.len);
-							str = gb_string_append_fmt(str, "-%p.o", asm_file.text);
-							obj_file = make_string_c(str);
+						// Reuse a provider-selection proof object when one
+						// exists for this exact input; otherwise assemble
+						// with the shared configuration below.
+						String proven = linker_verified_asm_lookup(asm_file);
+						if (proven.len != 0) {
+							array_add(&gen->output_object_paths, proven);
 						} else {
-							obj_file = concatenate_strings(permanent_allocator(), asm_file, str_lit(".o"));
-						}
+							String obj_file = {};
 
-						String obj_format;
-						if (build_context.metrics.ptr_size == 8) {
-							if (is_osx) {
-								obj_format = str_lit("macho64");
+							String temp_dir = temporary_directory(temporary_allocator());
+							if (temp_dir.len != 0) {
+								String filename = filename_without_directory(asm_file);
+
+								gbString str = gb_string_make(heap_allocator(), "");
+								str = gb_string_append_length(str, temp_dir.text, temp_dir.len);
+								str = gb_string_appendc(str, "/");
+								str = gb_string_append_length(str, filename.text, filename.len);
+								str = gb_string_append_fmt(str, "-%p.o", asm_file.text);
+								obj_file = make_string_c(str);
 							} else {
-								obj_format = str_lit("elf64");
+								obj_file = concatenate_strings(permanent_allocator(), asm_file, str_lit(".o"));
 							}
-						} else {
-							GB_ASSERT(build_context.metrics.ptr_size == 4);
-							if (is_osx) {
-								obj_format = str_lit("macho32");
-							} else {
-								obj_format = str_lit("elf32");
-							}
-						}
 
-						if (build_context.metrics.arch == TargetArch_riscv64) {
-							result = system_exec_command_line_app("clang",
-								"%s \"%.*s\" "
-								"-c -o \"%.*s\" "
-								"-target %.*s -march=rv64gc "
-								"%.*s "
-								"",
-								clang_path,
-								LIT(asm_file),
-								LIT(obj_file),
-								LIT(build_context.metrics.target_triplet),
-								LIT(build_context.extra_assembler_flags)
-							);
-						} else if (is_osx || !is_arch_x86()) {
-							// `as` comes with MacOS.
-							result = system_exec_command_line_app("as",
-								"as \"%.*s\" "
-								"-o \"%.*s\" "
-								"%.*s "
-								"",
-								LIT(asm_file),
-								LIT(obj_file),
-								LIT(build_context.extra_assembler_flags)
-							);
-						} else if (build_context.metrics.arch == TargetArch_arm64) {
-							result = system_exec_command_line_app("clang",
-								"%s \"%.*s\" "
-								"-c -o \"%.*s\" "
-								"-target %.*s "
-								"%.*s "
-								"",
-								clang_path,
-								LIT(asm_file),
-								LIT(obj_file),
-								LIT(build_context.metrics.target_triplet),
-								LIT(build_context.extra_assembler_flags)
-							);
-						} else {
-							// `nasm` only compiles x86 assembly.
-							// Note(bumbread): I'm assuming nasm is installed on the host machine.
-							// Shipping binaries on unix-likes gets into the weird territorry of
-							// "which version of glibc" is it linked with.
-							result = system_exec_command_line_app("nasm",
-								"nasm \"%.*s\" "
-								"-f \"%.*s\" "
-								"-o \"%.*s\" "
-								"%.*s "
-								"",
-								LIT(asm_file),
-								LIT(obj_format),
-								LIT(obj_file),
-								LIT(build_context.extra_assembler_flags)
-							);						
+							result = linker_assemble_asm_input(asm_file, obj_file);
 							if (result) {
-								gb_printf_err("executing `nasm` to assemble foreing import of %.*s failed.\n\tSuggestion: `nasm` does not ship with the compiler and should be installed with your system's package manager.\n", LIT(asm_file));
 								return result;
 							}
+							array_add(&gen->output_object_paths, obj_file);
 						}
-						array_add(&gen->output_object_paths, obj_file);
 					} else {
 						bool short_circuit = false;
 						if (string_ends_with(lib, str_lit(".framework"))) {
@@ -913,6 +1116,9 @@ try_cross_linking:;
 
 			if (build_context.no_crt) {
 				link_settings = gb_string_append_fmt(link_settings, "-nostdlib ");
+			}
+			if (linux_no_crt_tls() && build_context.build_mode == BuildMode_Executable) {
+				link_settings = gb_string_appendc(link_settings, "-static ");
 			}
 
 			if (build_context.build_mode == BuildMode_StaticLibrary) {

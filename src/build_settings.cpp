@@ -594,6 +594,7 @@ struct BuildContext {
 	bool   dynamic_literals;  // Opt-in to `#+feature dynamic-literals` project-wide.
 	bool   no_output_files;
 	bool   no_crt;
+	bool   explicit_no_crt; // set only by the -no-crt flag; automatic selection never sets it
 	bool   no_rpath;
 	bool   no_entry_point;
 	u64    no_analysis_flags; // AnalysisFlags, by -no-<name>-analysis
@@ -1000,6 +1001,29 @@ gb_global NamedTargetMetrics named_targets[] = {
 
 gb_global NamedTargetMetrics *selected_target_metrics;
 gb_global Subtarget selected_subtarget;
+
+// NOTE: Without the CRT, the Linux runtime entry stubs for these architectures install
+// the main thread's TLS block, which needs a static executable using local-exec TLS.
+gb_internal bool linux_no_crt_tls_requested() {
+	if (build_context.metrics.os != TargetOs_linux || selected_subtarget == Subtarget_Android) {
+		return false;
+	}
+	switch (build_context.metrics.arch) {
+	case TargetArch_amd64:
+	case TargetArch_arm64:
+	case TargetArch_riscv64:
+		return build_context.no_crt && !build_context.no_thread_local;
+	}
+	return false;
+}
+
+gb_internal bool linux_no_crt_tls() {
+	return linux_no_crt_tls_requested() &&
+	       !build_context.no_entry_point &&
+	       (build_context.build_mode == BuildMode_Executable ||
+	        build_context.build_mode == BuildMode_LLVM_IR ||
+	        build_context.build_mode == BuildMode_Assembly);
+}
 
 
 gb_internal TargetOsKind get_target_os_from_string(String str, Subtarget *subtarget_ = nullptr, String *subtarget_str = nullptr) {
@@ -1517,9 +1541,10 @@ gb_internal String path_to_fullpath(gbAllocator a, String s, bool *ok_) {
 		String result = copy_string(a, s);
 
 		PathToFullpathResult cached_result = {};
-		cached_result.result = copy_string(permanent_allocator(), result);
+		// Heap-owned so the entry stays valid across a trial-arena rewind.
+		cached_result.result = copy_string(heap_allocator(), result);
 		cached_result.ok     = false;
-		string_map_set(&cache, copy_string(permanent_allocator(), s), cached_result);
+		string_map_set(&cache, copy_string(heap_allocator(), s), cached_result);
 
 		return result;
 	}
@@ -1527,9 +1552,10 @@ gb_internal String path_to_fullpath(gbAllocator a, String s, bool *ok_) {
 	String result = copy_string(a, make_string_c(p));
 
 	PathToFullpathResult cached_result = {};
-	cached_result.result = copy_string(permanent_allocator(), result);
+	// Heap-owned so the entry stays valid across a trial-arena rewind.
+	cached_result.result = copy_string(heap_allocator(), result);
 	cached_result.ok     = true;
-	string_map_set(&cache, copy_string(permanent_allocator(), s), cached_result);
+	string_map_set(&cache, copy_string(heap_allocator(), s), cached_result);
 
 	return result;
 }
@@ -1980,7 +2006,7 @@ gb_internal void init_build_context(TargetMetrics *cross_target, Subtarget subta
 	} else if (metrics->arch == TargetArch_riscv64) {
 		// NOTE(laytan): didn't seem to work without this.
 		if (bc->reloc_mode == RelocMode_Default) {
-			bc->reloc_mode = RelocMode_PIC;
+			bc->reloc_mode = linux_no_crt_tls() ? RelocMode_Static : RelocMode_PIC;
 		}
 	} else if (metrics->os == TargetOs_linux && subtarget == Subtarget_Android) {
 		switch (metrics->arch) {
@@ -2005,7 +2031,7 @@ gb_internal void init_build_context(TargetMetrics *cross_target, Subtarget subta
 		}
 	} else if (metrics->os == TargetOs_linux) {
 		if (bc->reloc_mode == RelocMode_Default) {
-			bc->reloc_mode = RelocMode_PIC;
+			bc->reloc_mode = linux_no_crt_tls() ? RelocMode_Static : RelocMode_PIC;
 		}
 		switch (metrics->arch) {
 		case TargetArch_arm64:
@@ -2482,7 +2508,11 @@ gb_internal bool init_build_paths(String init_filename) {
 		//               For other outputs we expect it to be a file path.
 		if (build_context.build_mode == BuildMode_LLVM_IR) {
 			if (!output_is_directory) {
-				gb_printf_err("Output path %.*s should be a directory for LLVM-IR output.\n", LIT(output_file));
+				if (output_file.len > 0 && !gb_file_exists(cast(char const *)output_file.text)) {
+					gb_printf_err("Output directory does not exist: %.*s\nCreate the output directory first (e.g. `mkdir -p \"%.*s\"`).\n", LIT(output_file), LIT(output_file));
+				} else {
+					gb_printf_err("Output path %.*s should be a directory for LLVM-IR output.\n", LIT(output_file));
+				}
 				return false;
 			}
 			output_should_be_directory = true;
@@ -2623,6 +2653,29 @@ gb_internal bool init_build_paths(String init_filename) {
 		return false;
 	}
 
+	// Validate the output parent directory before any LLVM or linker work, so
+	// a missing parent reports here with the requested path instead of
+	// surfacing later as a bare LLVM or linker error. The compiler never
+	// creates the parent directory.
+	if (output_should_be_directory) {
+		if (!path_is_directory(bc->build_paths[BuildPath_Output])) {
+			gb_printf_err("Output directory does not exist: %.*s\nCreate the output directory first (e.g. `mkdir -p \"%.*s\"`).\n", LIT(output_file), LIT(output_file));
+			return false;
+		}
+	} else {
+		String parent = directory_from_path(output_file);
+		if (parent.len > 0 && !path_is_directory(parent)) {
+			String parent_nul = copy_string(ha, parent);
+			defer (gb_free(ha, parent_nul.text));
+			if (!gb_file_exists(cast(char *)parent_nul.text)) {
+				gb_printf_err("Output directory does not exist: %.*s\nRequested output file is '%.*s'. Create the parent directory first (e.g. `mkdir -p \"%.*s\"`).\n", LIT(parent), LIT(output_file), LIT(parent));
+			} else {
+				gb_printf_err("Output parent is not a directory: %.*s\nRequested output file is '%.*s'. Choose an output path inside an existing directory.\n", LIT(parent), LIT(output_file));
+			}
+			return false;
+		}
+	}
+
 	// gbFile      output_file_test;
 	// const char* output_file_name = (const char*)output_file.text;
 	// gbFileError output_test_err = gb_file_open_mode(&output_file_test, gbFileMode_Append | gbFileMode_Rw, output_file_name);
@@ -2674,22 +2727,38 @@ gb_internal bool init_build_paths(String init_filename) {
 	}
 
 	bool no_crt_checks_failed = false;
+	if (build_context.no_crt && build_context.sanitizer_flags != 0) {
+		gb_printf_err("-no-crt is incompatible with -sanitize because sanitizer runtimes require CRT\n");
+		no_crt_checks_failed = true;
+	}
 	if (build_context.no_crt && !build_context.ODIN_DEFAULT_TO_NIL_ALLOCATOR && !build_context.ODIN_DEFAULT_TO_PANIC_ALLOCATOR) {
 		switch (build_context.metrics.os) {
 		case TargetOs_linux:
+			if (linux_no_crt_tls() && build_context.reloc_mode == RelocMode_Static) {
+				break;
+			}
+			// fallthrough
 		case TargetOs_darwin:
 		case TargetOs_freebsd:
 		case TargetOs_openbsd:
 		case TargetOs_netbsd:
-			gb_printf_err("-no-crt on Unix systems requires either -default-to-nil-allocator or -default-to-panic-allocator to also be present, because the default allocator requires CRT\n");
+			gb_printf_err("-no-crt with the default heap allocator requires a supported Linux static executable with thread-local storage; otherwise add -default-to-nil-allocator or -default-to-panic-allocator\n");
 			no_crt_checks_failed = true;
 		}
 	}
 
 	if (build_context.no_crt && !build_context.no_thread_local) {
 		switch (build_context.metrics.os) {
-		case TargetOs_windows:
 		case TargetOs_linux:
+			if (linux_no_crt_tls_requested()) {
+				if (!linux_no_crt_tls() || build_context.reloc_mode != RelocMode_Static) {
+					gb_printf_err("-no-crt with thread-local storage on Linux requires a static executable with the standard entry point; otherwise add -no-thread-local\n");
+					no_crt_checks_failed = true;
+				}
+				break;
+			}
+			// fallthrough
+		case TargetOs_windows:
 		case TargetOs_darwin:
 		case TargetOs_freebsd:
 		case TargetOs_openbsd:

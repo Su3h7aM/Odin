@@ -3,7 +3,7 @@ package posix
 
 when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
-} else {
+} else when ODIN_OS != .Linux {
 	foreign import lib "system:c"
 }
 
@@ -15,8 +15,10 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/utime.html ]]
 	*/
-	@(link_name=LUTIME)
-	utime :: proc(path: cstring, times: ^utimbuf) -> result ---
+	when ODIN_OS != .Linux {
+		@(link_name=LUTIME)
+		utime :: proc(path: cstring, times: ^utimbuf) -> result ---
+	}
 }
 
 when ODIN_OS == .NetBSD {

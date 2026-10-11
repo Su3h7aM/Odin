@@ -1493,6 +1493,7 @@ gb_internal void init_universal(void) {
 	add_global_bool_constant("ODIN_NO_TYPE_ASSERT",             build_context.no_type_assert);
 	add_global_bool_constant("ODIN_DEFAULT_TO_PANIC_ALLOCATOR", bc->ODIN_DEFAULT_TO_PANIC_ALLOCATOR);
 	add_global_bool_constant("ODIN_NO_CRT",                     bc->no_crt);
+	add_global_bool_constant("ODIN_NO_THREAD_LOCAL",            bc->no_thread_local);
 	add_global_bool_constant("ODIN_USE_SEPARATE_MODULES",       bc->use_separate_modules);
 	add_global_bool_constant("ODIN_TEST",                       bc->command_kind == Command_test);
 	add_global_bool_constant("ODIN_NO_ENTRY_POINT",             bc->no_entry_point);
@@ -1795,6 +1796,9 @@ gb_internal void destroy_checker_info(CheckerInfo *i) {
 	array_free(&i->variable_init_order);
 	array_free(&i->required_foreign_imports_through_force);
 	array_free(&i->defineables);
+	array_free(&i->testing_procedures);
+	array_free(&i->init_procedures);
+	array_free(&i->fini_procedures);
 
 	array_free(&i->all_procedures);
 
@@ -3481,6 +3485,22 @@ gb_internal void generate_minimum_dependency_set(Checker *c, Entity *start) {
 		str_lit("memmove"),
 	);
 
+	// Owned-track lifecycle helpers the backend test entry references after
+	// parallel codegen. The envelope mirrors the backend emission gate
+	// exactly, so every mode that emits the calls has their transitive
+	// callees and globals rooted pre-parallel; DLL and other tracks keep
+	// exact behavior.
+	FORCE_ADD_RUNTIME_ENTITIES(build_context.no_crt &&
+	                           build_context.metrics.os == TargetOs_linux &&
+	                           build_context.metrics.arch == TargetArch_amd64 &&
+	                           build_context.build_mode != BuildMode_DynamicLibrary,
+		str_lit("_owned_startup_bootstrap"),
+		str_lit("run_c_init_arrays"),
+		str_lit("run_c_fini_arrays"),
+		str_lit("drain_atexit"),
+		str_lit("drain_and_close_atexit"),
+	);
+
 	FORCE_ADD_RUNTIME_ENTITIES(build_context.metrics.arch == TargetArch_arm32,
 		str_lit("aeabi_d2h")
 	);
@@ -3692,6 +3712,9 @@ gb_internal WORKER_TASK_PROC(generate_entity_dependency_graph_edges_worker) {
 				continue;
 			}
 			if (dep->kind == Entity_Variable) {
+				if (dep->Variable.link_name_owner) {
+					dep = dep->Variable.link_name_owner;
+				}
 				EntityGraphNode **m = map_get(work->vars, dep);
 				// NOTE(bill): a variable naming itself, e.g. `t: struct { next: ^type_of(t) }`, is not an initialization cycle
 				if (m != nullptr && *m != n) {
@@ -3866,8 +3889,11 @@ gb_internal CheckerTypePath *new_checker_type_path() {
 
 	auto *tp = atomic_freelist_get(checker_type_path_free_list);
 	if (tp == nullptr) {
-		tp = permanent_alloc_item<AtomicFreelist<CheckerTypePath> >();
-		array_init(&tp->value, permanent_allocator(), 0, 16);
+		// Heap-owned so entries survive a trial-arena rewind and stay
+		// valid for later runs; the array only ever holds transient
+		// Entity views cleared on destroy.
+		tp = gb_alloc_item(heap_allocator(), AtomicFreelist<CheckerTypePath>);
+		array_init(&tp->value, heap_allocator(), 0, 16);
 	}
 	return &tp->value;
 }
@@ -4057,6 +4083,123 @@ gb_internal void init_core_objc_c(Checker *c) {
 		t_objc_super     = find_core_type(c, str_lit("objc_super"));
 		t_objc_super_ptr = alloc_type_pointer(t_objc_super);
 	}
+}
+
+// Drops every cached core type so the next checking run re-resolves them
+// from its own entities. The six init_core_* families early-out on these
+// globals; without a reset a second run would keep run-1 named types
+// (t_context and friends propagate into checked state and codegen), and
+// Named-identity comparison would mix runs. The list below covers every
+// global those families assign; init_core_objc_c is darwin-only and
+// init_preload keeps none.
+gb_internal void reset_core_type_info_for_recheck(void) {
+	t_type_info = nullptr;
+	t_type_info_enum_value = nullptr;
+	t_type_info_ptr = nullptr;
+	t_type_info_enum_value_ptr = nullptr;
+	t_type_info_string_encoding_kind = nullptr;
+	t_type_info_named = nullptr;
+	t_type_info_integer = nullptr;
+	t_type_info_rune = nullptr;
+	t_type_info_float = nullptr;
+	t_type_info_quaternion = nullptr;
+	t_type_info_complex = nullptr;
+	t_type_info_string = nullptr;
+	t_type_info_boolean = nullptr;
+	t_type_info_any = nullptr;
+	t_type_info_typeid = nullptr;
+	t_type_info_pointer = nullptr;
+	t_type_info_multi_pointer = nullptr;
+	t_type_info_procedure = nullptr;
+	t_type_info_array = nullptr;
+	t_type_info_enumerated_array = nullptr;
+	t_type_info_dynamic_array = nullptr;
+	t_type_info_slice = nullptr;
+	t_type_info_parameters = nullptr;
+	t_type_info_struct = nullptr;
+	t_type_info_union = nullptr;
+	t_type_info_enum = nullptr;
+	t_type_info_map = nullptr;
+	t_type_info_bit_set = nullptr;
+	t_type_info_simd_vector = nullptr;
+	t_type_info_matrix = nullptr;
+	t_type_info_soa_pointer = nullptr;
+	t_type_info_bit_field = nullptr;
+	t_type_info_fixed_capacity_dynamic_array = nullptr;
+	t_type_info_named_ptr = nullptr;
+	t_type_info_integer_ptr = nullptr;
+	t_type_info_rune_ptr = nullptr;
+	t_type_info_float_ptr = nullptr;
+	t_type_info_quaternion_ptr = nullptr;
+	t_type_info_complex_ptr = nullptr;
+	t_type_info_string_ptr = nullptr;
+	t_type_info_boolean_ptr = nullptr;
+	t_type_info_any_ptr = nullptr;
+	t_type_info_typeid_ptr = nullptr;
+	t_type_info_pointer_ptr = nullptr;
+	t_type_info_multi_pointer_ptr = nullptr;
+	t_type_info_procedure_ptr = nullptr;
+	t_type_info_array_ptr = nullptr;
+	t_type_info_enumerated_array_ptr = nullptr;
+	t_type_info_dynamic_array_ptr = nullptr;
+	t_type_info_slice_ptr = nullptr;
+	t_type_info_parameters_ptr = nullptr;
+	t_type_info_struct_ptr = nullptr;
+	t_type_info_union_ptr = nullptr;
+	t_type_info_enum_ptr = nullptr;
+	t_type_info_map_ptr = nullptr;
+	t_type_info_bit_set_ptr = nullptr;
+	t_type_info_simd_vector_ptr = nullptr;
+	t_type_info_matrix_ptr = nullptr;
+	t_type_info_soa_pointer_ptr = nullptr;
+	t_type_info_bit_field_ptr = nullptr;
+	t_type_info_fixed_capacity_dynamic_array_ptr = nullptr;
+	t_allocator = nullptr;
+	t_allocator_ptr = nullptr;
+	t_allocator_error = nullptr;
+	t_context = nullptr;
+	t_context_ptr = nullptr;
+	t_source_code_location = nullptr;
+	t_source_code_location_ptr = nullptr;
+	t_load_directory_file = nullptr;
+	t_load_directory_file_ptr = nullptr;
+	t_load_directory_file_slice = nullptr;
+	t_map_info = nullptr;
+	t_map_cell_info = nullptr;
+	t_raw_map = nullptr;
+	t_map_info_ptr = nullptr;
+	t_map_cell_info_ptr = nullptr;
+	t_raw_map_ptr = nullptr;
+	// Lazily built once per process around the current Source_Code_Location
+	// named type; without a reset the fallback recheck would keep the
+	// superseded run's procedure type.
+	t_map_set_proc = nullptr;
+	// Minimum-dependency type-info collection claims each shared Type once
+	// via an on-object flag; the static basic types outlive any single
+	// run, so a superseded run's claims must be released before the final
+	// run collects its own set, or entries (e.g. u32 for map hashing)
+	// go missing from its table.
+	for (isize i = 0; i < Basic_COUNT; i++) {
+		basic_types[i].flags.fetch_and(~cast(u32)TypeFlag_InMinDepTypeInfoSet, std::memory_order_relaxed);
+		// Pointer-to-basic Types are cached on the static basic and shared
+		// across runs; the cached objects would carry the superseded run's
+		// min-dep claims (at every nested depth: ^B, ^^B, ...) into the
+		// final run. Nulling the roots discards the whole chains at once.
+		// This runs before init_universal rebuilds the t_*_ptr globals and
+		// before any checking, with workers quiescent, so the cache is
+		// republished coherently and no split identity can result.
+		basic_types[i].cached_pointer.store(nullptr, std::memory_order_relaxed);
+	}
+}
+
+// Check-phase one-way flags are set during a check run and never cleared:
+// a superseded provisional run must not leak its phase into the final
+// recheck. Both live only within body checking (the worker-queue flag is
+// balanced true/false around the queue drain), so forcing false between
+// runs restores process-start state.
+gb_internal void reset_check_phase_globals_for_recheck(void) {
+	global_after_checking_procedure_bodies = false;
+	global_procedure_body_in_worker_queue.store(false, std::memory_order_relaxed);
 }
 
 gb_internal void init_preload(Checker *c) {
@@ -7274,6 +7417,33 @@ gb_internal void check_procedure_bodies(Checker *c) {
 
 	global_procedure_body_in_worker_queue = false;
 }
+
+// Destroys the heap table backings of both per-generation worker untyped
+// maps. Each worker struct array is arena-owned and replaced wholesale
+// by the next generation's init_checker / check_init_worker_data, which
+// would otherwise orphan the heap entries tables (PtrMap grows with the
+// heap allocator and only map_clears per use, so the highwater backing
+// outlives the run). Keys and values stay arena-owned and are never
+// touched here. Call once on the managed fallback while the pool is
+// quiescent and before the arena rewind releases the structs
+// themselves. Either array may be nil when the trial errored before its
+// setup; both are recreated per generation, so the globals are nulled
+// to avoid stale roots.
+gb_internal void destroy_trial_worker_untyped_maps(void) {
+	isize thread_count = global_thread_pool.threads.count;
+	if (collect_entity_worker_data != nullptr) {
+		for (isize i = 0; i < thread_count; i++) {
+			map_destroy(&collect_entity_worker_data[i].untyped);
+		}
+		collect_entity_worker_data = nullptr;
+	}
+	if (check_procedure_bodies_worker_data != nullptr) {
+		for (isize i = 0; i < thread_count; i++) {
+			map_destroy(&check_procedure_bodies_worker_data[i].untyped);
+		}
+		check_procedure_bodies_worker_data = nullptr;
+	}
+}
 gb_internal void add_untyped_expressions(CheckerInfo *cinfo, UntypedExprInfoMap *untyped) {
 	if (untyped == nullptr) {
 		return;
@@ -8178,6 +8348,9 @@ gb_internal void check_parsed_files(Checker *c) {
 
 	TIME_SECTION("check objc context provider procedures");
 	check_objc_context_provider_procedures(c);
+
+	TIME_SECTION("resolve global variable link names");
+	check_link_name_uses(c, true);
 
 	TIME_SECTION("generate global init order graph nodes");
 	EntityGraph graph = {};

@@ -5,7 +5,7 @@ import "core:c"
 
 when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
-} else {
+} else when ODIN_OS != .Linux || size_of(rawptr) == 4 {
 	foreign import lib "system:c"
 }
 
@@ -17,32 +17,40 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getitimer.html ]]
 	*/
-	@(link_name=LGETITIMER)
-	getitimer :: proc(which: ITimer, value: ^itimerval) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LGETITIMER)
+		getitimer :: proc(which: ITimer, value: ^itimerval) -> result ---
+	}
 
 	/*
 	Set the timer to the value given, and store the previous value in ovalue if it is not nil.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getitimer.html ]]
 	*/
-	@(link_name=LSETITIMER)
-	setitimer :: proc(which: ITimer, value: ^itimerval, ovalue: ^itimerval) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LSETITIMER)
+		setitimer :: proc(which: ITimer, value: ^itimerval, ovalue: ^itimerval) -> result ---
+	}
 
 	/*
 	Obtains the current time.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/gettimeofday.html ]]
 	*/
-	@(link_name=LGETTIMEOFDAY)
-	gettimeofday :: proc(tp: ^timeval, tzp: rawptr = nil) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LGETTIMEOFDAY)
+		gettimeofday :: proc(tp: ^timeval, tzp: rawptr = nil) -> result ---
+	}
 
 	/*
 	Sets the access and modification times of the file at the given path.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/utimes.html ]]
 	*/
-	@(link_name=LUTIMES)
-	utimes :: proc(path: cstring, times: ^[2]timeval) -> result ---	
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LUTIMES)
+		utimes :: proc(path: cstring, times: ^[2]timeval) -> result ---
+	}
 }
 
 ITimer :: enum c.int {

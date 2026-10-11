@@ -5,7 +5,7 @@ import "core:c"
 
 when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
-} else {
+} else when ODIN_OS != .Linux {
 	foreign import lib "system:c"
 }
 
@@ -35,7 +35,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/uname.html ]]
 	*/
-	uname :: proc(uname: ^utsname) -> c.int ---
+	when ODIN_OS != .Linux {
+		uname :: proc(uname: ^utsname) -> c.int ---
+	}
 }
 
 when ODIN_OS == .Darwin || ODIN_OS == .FreeBSD || ODIN_OS == .NetBSD || ODIN_OS == .OpenBSD {

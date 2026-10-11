@@ -304,7 +304,7 @@ struct CheckedAddress {
 enum LinkNameUseKind : u8 {
 	LinkNameUse_ForeignProcedure,
 	LinkNameUse_Procedure, // exported or with a link name
-	LinkNameUse_Variable,  // foreign or exported
+	LinkNameUse_Variable,  // foreign, exported, or with a link name
 };
 
 struct LinkNameUse {

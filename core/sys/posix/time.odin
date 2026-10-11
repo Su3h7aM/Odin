@@ -35,8 +35,10 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/gmtime_r.html ]]
 	*/
-	@(link_name=LGMTIMER)
-	gmtime_r :: proc(timer: ^time_t, result: ^tm) -> ^tm ---
+	when ODIN_OS != .Linux {
+		@(link_name=LGMTIMER)
+		gmtime_r :: proc(timer: ^time_t, result: ^tm) -> ^tm ---
+	}
 
 	/*
 	Convert the time in seconds since epoch to a broken-down tm struct in local time.
@@ -53,24 +55,30 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/clock_getres.html ]]
 	*/
-	@(link_name=LCLOCKGETRES)
-	clock_getres :: proc(clock_id: Clock, res: ^timespec) -> result ---
+	when ODIN_OS != .Linux {
+		@(link_name=LCLOCKGETRES)
+		clock_getres :: proc(clock_id: Clock, res: ^timespec) -> result ---
+	}
 
 	/*
 	Returns the current value tp for the specified clock, clock_id.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/clock_getres.html ]]
 	*/
-	@(link_name=LCLOCKGETTIME)
-	clock_gettime :: proc(clock_id: Clock, tp: ^timespec) -> result ---
+	when ODIN_OS != .Linux {
+		@(link_name=LCLOCKGETTIME)
+		clock_gettime :: proc(clock_id: Clock, tp: ^timespec) -> result ---
+	}
 
 	/*
 	Sets the specified clock's time.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/clock_getres.html ]]
 	*/
-	@(link_name=LCLOCKSETTIME)
-	clock_settime :: proc(clock_id: Clock, tp: ^timespec) -> result ---
+	when ODIN_OS != .Linux {
+		@(link_name=LCLOCKSETTIME)
+		clock_settime :: proc(clock_id: Clock, tp: ^timespec) -> result ---
+	}
 
 	/*
 	Converts a string representation of a date or time into a broken-down time.
@@ -90,8 +98,10 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/nanosleep.html ]]
 	*/
-	@(link_name=LNANOSLEEP)
-	nanosleep :: proc(rqtp: ^timespec, rmtp: ^timespec) -> result ---
+	when ODIN_OS != .Linux {
+		@(link_name=LNANOSLEEP)
+		nanosleep :: proc(rqtp: ^timespec, rmtp: ^timespec) -> result ---
+	}
 
 	/*
 	Converts the character string to values which are stored in tm, using the specified format.
@@ -139,14 +149,23 @@ timespec :: libc.timespec
 CLOCKS_PER_SEC :: libc.CLOCKS_PER_SEC
 
 asctime   :: libc.asctime
-clock     :: libc.clock
 ctime     :: libc.ctime
-difftime  :: libc.difftime
-gmtime    :: libc.gmtime
 localtime :: libc.localtime
+// On Linux noCRT gmtime is implemented natively in time_linux.odin; every
+// other profile keeps the libc static buffer, which actual C localtime and
+// ctime calls share.
+when ODIN_OS != .Linux || !ODIN_NO_CRT {
+	gmtime :: libc.gmtime
+}
 mktime    :: libc.mktime
 strftime  :: libc.strftime
-time      :: libc.time
+// On Linux these three are implemented natively in time_linux.odin
+// through system calls, without libc.
+when ODIN_OS != .Linux {
+	clock    :: libc.clock
+	difftime :: libc.difftime
+	time     :: libc.time
+}
 
 Clock :: enum clockid_t {
 	// system-wide monotonic clock, defined as clock measuring real time,
@@ -173,10 +192,12 @@ when ODIN_OS == .NetBSD {
 	@(private) LCTIMER       :: "ctime_r"
 	@(private) LGMTIMER      :: "gmtime_r"
 	@(private) LLOCALTIMER   :: "localtime_r"
-	@(private) LCLOCKGETRES  :: "clock_getres"
-	@(private) LCLOCKGETTIME :: "clock_gettime"
-	@(private) LCLOCKSETTIME :: "clock_settime"
-	@(private) LNANOSLEEP    :: "nanosleep"
+	when ODIN_OS != .Linux {
+		@(private) LCLOCKGETRES  :: "clock_getres"
+		@(private) LCLOCKGETTIME :: "clock_gettime"
+		@(private) LCLOCKSETTIME :: "clock_settime"
+		@(private) LNANOSLEEP    :: "nanosleep"
+	}
 	@(private) LTIMEZONE     :: "timezone"
 }
 

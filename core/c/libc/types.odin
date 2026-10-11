@@ -2,7 +2,9 @@ package libc
 
 import "core:c"
 
-#assert(!ODIN_NO_CRT, `"core:c/libc" cannot be imported when '-no-crt' is used`)
+// On Linux the types and constants stay usable with -no-crt; calling a libc
+// procedure then fails at link time.
+#assert(!ODIN_NO_CRT || ODIN_OS == .Linux, `"core:c/libc" cannot be imported when '-no-crt' is used`)
 
 char           :: c.char // assuming -funsigned-char
 

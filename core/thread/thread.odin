@@ -110,6 +110,9 @@ thread will be in a suspended state, until `start()` procedure is called.
 To start the thread, call `start()`. Also the `create_and_start()`
 procedure can be called to create and start the thread immediately.
 
+Linux without CRT requires runtime-managed static TLS. `-no-thread-local` is
+unsupported. This procedure returns nil if startup did not install managed TLS.
+
 Optionally specify the thread's name/description.
 the name/description will be truncated to fit the OS's limit.
 */
@@ -161,6 +164,15 @@ join_multiple :: proc(threads: ..^Thread) {
 
 /*
 Forcibly terminate a running thread.
+
+Asynchronous and forceful: the target performs no cleanup on the way out, so
+locks it held stay held, memory it owned stays owned, and thread-local
+cleaners do not run. Only the low 8 bits of the exit code survive. A thread
+that already exited needs no signal; joining it still reaps it.
+
+On Linux without CRT this holds on amd64 through the owned cancel protocol,
+and panics on other architectures, where asynchronous cancellation cannot
+safely release thread-local allocator state.
 */
 terminate :: proc(thread: ^Thread, exit_code: int) {
 	_terminate(thread, exit_code)
@@ -316,6 +328,9 @@ If `self_cleanup` is specified, after the thread finishes the execution of the
 `fn` procedure, the resources associated with the thread are going to be
 automatically freed.
 
+On Linux without CRT, stack and TLS mappings are reclaimed lazily by a later
+thread creation, join, or destruction, after the kernel has finished the exit.
+
 Optionally specify the thread's name/description.
 the name/description will be truncated to fit the OS's limit.
 
@@ -354,6 +369,9 @@ to execute. The thread will have priority specified by the `priority` parameter.
 If `self_cleanup` is specified, after the thread finishes the execution of the
 `fn` procedure, the resources associated with the thread are going to be
 automatically freed.
+
+On Linux without CRT, stack and TLS mappings are reclaimed lazily by a later
+thread creation, join, or destruction, after the kernel has finished the exit.
 
 Optionally specify the thread's name/description.
 the name/description will be truncated to fit the OS's limit.
@@ -397,6 +415,9 @@ to execute. The thread will have priority specified by the `priority` parameter.
 If `self_cleanup` is specified, after the thread finishes the execution of the
 `fn` procedure, the resources associated with the thread are going to be
 automatically freed.
+
+On Linux without CRT, stack and TLS mappings are reclaimed lazily by a later
+thread creation, join, or destruction, after the kernel has finished the exit.
 
 Optionally specify the thread's name/description.
 the name/description will be truncated to fit the OS's limit.
@@ -446,6 +467,9 @@ to execute. The thread will have priority specified by the `priority` parameter.
 If `self_cleanup` is specified, after the thread finishes the execution of the
 `fn` procedure, the resources associated with the thread are going to be
 automatically freed.
+
+On Linux without CRT, stack and TLS mappings are reclaimed lazily by a later
+thread creation, join, or destruction, after the kernel has finished the exit.
 
 Optionally specify the thread's name/description.
 the name/description will be truncated to fit the OS's limit.
@@ -501,6 +525,9 @@ to execute. The thread will have priority specified by the `priority` parameter.
 If `self_cleanup` is specified, after the thread finishes the execution of the
 `fn` procedure, the resources associated with the thread are going to be
 automatically freed.
+
+On Linux without CRT, stack and TLS mappings are reclaimed lazily by a later
+thread creation, join, or destruction, after the kernel has finished the exit.
 
 Optionally specify the thread's name/description.
 the name/description will be truncated to fit the OS's limit.
@@ -558,6 +585,9 @@ to execute. The thread will have priority specified by the `priority` parameter.
 If `self_cleanup` is specified, after the thread finishes the execution of the
 `fn` procedure, the resources associated with the thread are going to be
 automatically freed.
+
+On Linux without CRT, stack and TLS mappings are reclaimed lazily by a later
+thread creation, join, or destruction, after the kernel has finished the exit.
 
 Optionally specify the thread's name/description.
 the name/description will be truncated to fit the OS's limit.

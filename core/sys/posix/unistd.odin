@@ -5,19 +5,28 @@ import "core:c"
 
 when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
-} else {
+} else when ODIN_OS != .Linux || !ODIN_NO_CRT {
+	// Managed Linux keeps the real C library for its fork/credential
+	// functions and C environ. Native Linux binds no foreign member
+	// (every one below is non-Linux), so the import exists only where
+	// something can bind to it; an empty system import must not force
+	// a managed profile.
 	foreign import lib "system:c"
 }
 
 // unistd.h - standard symbolic constants and types
 
+// Present only where the library above is; native Linux has no members.
+when ODIN_OS != .Linux || !ODIN_NO_CRT {
 foreign lib {
 	/*
 	Equivalent to `access` but relative paths are resolved based on `fd`.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/access.html ]]
 	*/
-	faccessat :: proc(fd: FD, path: cstring, amode: Mode_Flags, flag: AT_Flags) -> result ---
+	when ODIN_OS != .Linux {
+		faccessat :: proc(fd: FD, path: cstring, amode: Mode_Flags, flag: AT_Flags) -> result ---
+	}
 
 	/*
 	The alarm() function shall cause the system to generate a SIGALRM signal for the process after the number of realtime seconds specified by seconds have elapsed. Processor scheduling delays may prevent the process from handling the signal as soon as it is generated.
@@ -28,14 +37,18 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/alarm.html ]]
 	*/
-	alarm :: proc(seconds: c.uint) -> c.uint ---
+	when ODIN_OS != .Linux {
+		alarm :: proc(seconds: c.uint) -> c.uint ---
+	}
 
 	/*
 	Equivalent to chdir but instead of a path the fildes is resolved to a directory.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fchdir.html ]]
 	*/
-	fchdir :: proc(fildes: FD) -> result ---
+	when ODIN_OS != .Linux {
+		fchdir :: proc(fildes: FD) -> result ---
+	}
 
 	/*
 	Changes the user and group ownership of a file.
@@ -44,8 +57,10 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/chown.html ]]
 	*/
-	@(link_name=LCHOWN)
-	chown :: proc(path: cstring, owner: uid_t, group: gid_t) -> result ---
+	when ODIN_OS != .Linux {
+		@(link_name=LCHOWN)
+		chown :: proc(path: cstring, owner: uid_t, group: gid_t) -> result ---
+	}
 
 	/*
 	Equivalent to chown expect that it takes a file descriptor.
@@ -58,15 +73,19 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fchown.html ]]
 	*/
-	@(link_name=LFCHOWN)
-	fchown :: proc(fildes: FD, owner: uid_t, mode: gid_t) -> result ---
+	when ODIN_OS != .Linux {
+		@(link_name=LFCHOWN)
+		fchown :: proc(fildes: FD, owner: uid_t, mode: gid_t) -> result ---
+	}
 
 	/*
 	Equivalent to fchown except that relative paths are based on the given fildes.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/chown.html ]]
 	*/
-	fchownat :: proc(fildes: FD, path: cstring, owner: uid_t, group: gid_t, flag: AT_Flags) -> result ---
+	when ODIN_OS != .Linux {
+		fchownat :: proc(fildes: FD, path: cstring, owner: uid_t, group: gid_t, flag: AT_Flags) -> result ---
+	}
 
 	/*
 	If path points to a symbolic link, the owner and group of the link itself is changed.
@@ -74,15 +93,19 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/lchown.html ]]
 	*/
-	@(link_name=LLCHOWN)
-	lchown :: proc(path: cstring, owner: uid_t, group: gid_t) -> result ---
+	when ODIN_OS != .Linux {
+		@(link_name=LLCHOWN)
+		lchown :: proc(path: cstring, owner: uid_t, group: gid_t) -> result ---
+	}
 
 	/*
 	Deallocates the file descriptor indicated by fildes. 
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/close.html ]]
 	*/
-	close :: proc(fildes: FD) -> result ---
+	when ODIN_OS != .Linux {
+		close :: proc(fildes: FD) -> result ---
+	}
 
 	/*
 	Return configuration-defined string values.
@@ -101,14 +124,18 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fpathconf.html ]]
 	*/
-	pathconf :: proc(path: cstring, name: PC) -> c.long ---
+	when ODIN_OS != .Linux {
+		pathconf :: proc(path: cstring, name: PC) -> c.long ---
+	}
 
 	/*
 	Equivalent to pathconf but takes a file descriptor instead of a path.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fpathconf.html ]]
 	*/
-	fpathconf :: proc(fildes: FD, name: PC) -> c.long ---
+	when ODIN_OS != .Linux {
+		fpathconf :: proc(fildes: FD, name: PC) -> c.long ---
+	}
 
 	/*
 	Determines the current value of configurable system limit or options.
@@ -117,7 +144,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sysconf.html ]]
 	*/
-	sysconf :: proc(name: SC) -> c.long ---
+	when ODIN_OS != .Linux {
+		sysconf :: proc(name: SC) -> c.long ---
+	}
 
 	/*
 	A string encoding function. The algorithm is implementation-defined.
@@ -164,7 +193,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/dup.html ]] 
 	*/
-	dup :: proc(fildes: FD) -> FD ---
+	when ODIN_OS != .Linux {
+		dup :: proc(fildes: FD) -> FD ---
+	}
 
 	/*
 	Causes the file descriptor fildes2 to refer to the same open file description as
@@ -178,7 +209,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/dup.html ]] 
 	*/
-	dup2 :: proc(fildes, fildes2: FD) -> FD ---
+	when ODIN_OS != .Linux {
+		dup2 :: proc(fildes, fildes2: FD) -> FD ---
+	}
 
 	/*
 	The exec family of functions shall replace the current process image with a new process image.
@@ -194,7 +227,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/execl.html ]]
 	*/
-	execl :: proc(path: cstring, arg0: cstring, #c_vararg args: ..cstring) -> c.int ---
+	when ODIN_OS != .Linux {
+		execl :: proc(path: cstring, arg0: cstring, #c_vararg args: ..cstring) -> c.int ---
+	}
 
 	/*
 	The exec family of functions shall replace the current process image with a new process image.
@@ -216,7 +251,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/execl.html ]]
 	*/
-	execle :: proc(path: cstring, arg0: cstring, #c_vararg args: ..any) -> c.int ---
+	when ODIN_OS != .Linux {
+		execle :: proc(path: cstring, arg0: cstring, #c_vararg args: ..any) -> c.int ---
+	}
 
 	/*
 	The exec family of functions shall replace the current process image with a new process image.
@@ -233,7 +270,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/execl.html ]]
 	*/
-	execlp :: proc(file: cstring, arg0: cstring, #c_vararg args: ..cstring) -> c.int ---
+	when ODIN_OS != .Linux {
+		execlp :: proc(file: cstring, arg0: cstring, #c_vararg args: ..cstring) -> c.int ---
+	}
 
 	/*
 	The exec family of functions shall replace the current process image with a new process image.
@@ -250,7 +289,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/execl.html ]]
 	*/
-	execv :: proc(path: cstring, argv: [^]cstring) -> c.int ---
+	when ODIN_OS != .Linux {
+		execv :: proc(path: cstring, argv: [^]cstring) -> c.int ---
+	}
 
 	/*
 	The exec family of functions shall replace the current process image with a new process image.
@@ -268,7 +309,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/execl.html ]]
 	*/
-	execvp :: proc(file: cstring, argv: [^]cstring) -> c.int ---
+	when ODIN_OS != .Linux {
+		execvp :: proc(file: cstring, argv: [^]cstring) -> c.int ---
+	}
 
 	/*
 	The exec family of functions shall replace the current process image with a new process image.
@@ -287,7 +330,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/execl.html ]]
 	*/
-	execve :: proc(path: cstring, argv: [^]cstring, envp: [^]cstring) -> c.int ---
+	when ODIN_OS != .Linux {
+		execve :: proc(path: cstring, argv: [^]cstring, envp: [^]cstring) -> c.int ---
+	}
 
 	/*
 	The exec family of functions shall replace the current process image with a new process image.
@@ -306,7 +351,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/execl.html ]]
 	*/
-	fexecve :: proc(fd: FD, argv: [^]cstring, envp: [^]cstring) -> c.int ---
+	when ODIN_OS != .Linux {
+		fexecve :: proc(fd: FD, argv: [^]cstring, envp: [^]cstring) -> c.int ---
+	}
 
 	/*
 	Example:
@@ -324,7 +371,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fdatasync.html ]]
 	*/
-	fdatasync :: proc(fd: FD) -> result ---
+	when ODIN_OS != .Linux {
+		fdatasync :: proc(fd: FD) -> result ---
+	}
 
 	/*
 	The fork() function shall create a new process.
@@ -335,7 +384,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fork.html ]]
 	*/
-	fork :: proc() -> pid_t ---
+	when ODIN_OS != .Linux || !ODIN_NO_CRT {
+		fork :: proc() -> pid_t ---
+	}
 
 	/*
 	Requests that all data for the open file descriptor named by fildes is to be transferred
@@ -343,21 +394,27 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fsync.html ]]
 	*/
-	fsync :: proc(fildes: FD) -> result ---
+	when ODIN_OS != .Linux {
+		fsync :: proc(fildes: FD) -> result ---
+	}
 
 	/*
 	Truncates a file to the specified length.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/truncate.html ]]
 	*/
-	truncate :: proc(path: cstring, length: off_t) -> result ---
+	when ODIN_OS != .Linux {
+		truncate :: proc(path: cstring, length: off_t) -> result ---
+	}
 
 	/*
 	Truncates a file to the specified length.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/ftruncate.html ]]
 	*/
-	ftruncate :: proc(fildes: FD, length: off_t) -> result ---
+	when ODIN_OS != .Linux {
+		ftruncate :: proc(fildes: FD, length: off_t) -> result ---
+	}
 
 	/*
 	Returns the effective group ID of the calling process.
@@ -412,7 +469,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getgroups.html ]]
 	*/
-	getgroups :: proc(gidsetsize: c.int, grouplist: [^]gid_t) -> c.int ---
+	when ODIN_OS != .Linux {
+		getgroups :: proc(gidsetsize: c.int, grouplist: [^]gid_t) -> c.int ---
+	}
 
 	/*
 	Retrieves a 32-bit identifier for the current host.
@@ -430,7 +489,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/gethostname.html ]]
 	*/
-	gethostname :: proc(name: [^]c.char, namelen: c.size_t) -> result ---
+	when ODIN_OS != .Linux {
+		gethostname :: proc(name: [^]c.char, namelen: c.size_t) -> result ---
+	}
 
 	/*
 	Returns a string containing the user name associated by the login activity.
@@ -536,7 +597,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getpgrp.html ]]
 	*/
-	getpgrp :: proc() -> pid_t ---
+	when ODIN_OS != .Linux {
+		getpgrp :: proc() -> pid_t ---
+	}
 
 	/*
 	Returns the ID of the calling process.
@@ -591,14 +654,18 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/isatty.html ]]
 	*/
-	isatty :: proc(fildes: FD) -> b32 ---
+	when ODIN_OS != .Linux {
+		isatty :: proc(fildes: FD) -> b32 ---
+	}
 
 	/*
 	Creates a new link for the existing file path1 to path2.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/link.html ]]
 	*/
-	link :: proc(path1: cstring, path2: cstring) -> result ---
+	when ODIN_OS != .Linux {
+		link :: proc(path1: cstring, path2: cstring) -> result ---
+	}
 
 	/*
 	If path1 is relative it is relative to directory fd1.
@@ -608,21 +675,27 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/link.html ]]
 	*/
-	linkat :: proc(fd1: FD, path1: cstring, fd2: FD, path2: cstring, flag: AT_Flags) -> result ---
+	when ODIN_OS != .Linux {
+		linkat :: proc(fd1: FD, path1: cstring, fd2: FD, path2: cstring, flag: AT_Flags) -> result ---
+	}
 
 	/*
 	Creates a symbolic link called path2 that contains a link to path1.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/symlink.html ]]
 	*/
-	symlink :: proc(path1: cstring, path2: cstring) -> result ---
+	when ODIN_OS != .Linux {
+		symlink :: proc(path1: cstring, path2: cstring) -> result ---
+	}
 
 	/*
 	Equivalent to symlink but relative paths are resolved to dir fd.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/symlink.html ]]
 	*/
-	symlinkat :: proc(path1: cstring, fd: FD, path2: cstring) -> result ---
+	when ODIN_OS != .Linux {
+		symlinkat :: proc(path1: cstring, fd: FD, path2: cstring) -> result ---
+	}
 
 	/*
 	Locks sections of a file with advisory-mode locks.
@@ -641,7 +714,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/lockf.html ]]
 	*/
-	lockf :: proc(fildes: FD, function: Lock_Function, size: off_t) -> result ---
+	when ODIN_OS != .Linux {
+		lockf :: proc(fildes: FD, function: Lock_Function, size: off_t) -> result ---
+	}
 
 	/*
 	Sets the file offset of the given file descriptor.
@@ -654,7 +729,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/lseek.html ]]
 	*/
-	lseek :: proc(fildes: FD, offset: off_t, whence: Whence) -> off_t ---
+	when ODIN_OS != .Linux {
+		lseek :: proc(fildes: FD, offset: off_t, whence: Whence) -> off_t ---
+	}
 
 	/*
 	Changes the nice value of a process.
@@ -676,7 +753,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/nice.html ]]
 	*/
-	nice :: proc(incr: c.int) -> c.int ---
+	when ODIN_OS != .Linux {
+		nice :: proc(incr: c.int) -> c.int ---
+	}
 
 	/*
 	Suspend the thread until a signal is received.
@@ -685,7 +764,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/pause.html ]]
 	*/
-	pause :: proc() -> c.int ---
+	when ODIN_OS != .Linux {
+		pause :: proc() -> c.int ---
+	}
 
 	/*
 	Create an interprocess channel.
@@ -724,7 +805,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/pipe.html ]]
 	*/
-	pipe :: proc(fildes: ^[2]FD) -> result ---
+	when ODIN_OS != .Linux {
+		pipe :: proc(fildes: ^[2]FD) -> result ---
+	}
 
 	/*
 	Read from a file.
@@ -733,14 +816,18 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/pread.html ]]
 	*/
-	read :: proc(fd: FD, buf: [^]byte, nbyte: c.size_t) -> c.ssize_t ---
+	when ODIN_OS != .Linux {
+		read :: proc(fd: FD, buf: [^]byte, nbyte: c.size_t) -> c.ssize_t ---
+	}
 
 	/*
 	Equivalent to read on a specified offset instead of the internal offset.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/pread.html ]]
 	*/
-	pread :: proc(fd: FD, buf: [^]byte, nbyte: c.size_t, offset: off_t) -> c.ssize_t ---
+	when ODIN_OS != .Linux {
+		pread :: proc(fd: FD, buf: [^]byte, nbyte: c.size_t, offset: off_t) -> c.ssize_t ---
+	}
 
 	/*
 	Write on a file.
@@ -749,14 +836,18 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/write.html ]]
 	*/
-	write :: proc(fd: FD, buf: [^]byte, buflen: c.size_t) -> c.ssize_t ---
+	when ODIN_OS != .Linux {
+		write :: proc(fd: FD, buf: [^]byte, buflen: c.size_t) -> c.ssize_t ---
+	}
 
 	/*
 	Equivalent to write on a specified offset instead of the internal offset.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/write.html ]]
 	*/
-	pwrite :: proc(fd: FD, buf: [^]byte, buflen: c.size_t, offset: off_t) -> c.ssize_t ---
+	when ODIN_OS != .Linux {
+		pwrite :: proc(fd: FD, buf: [^]byte, buflen: c.size_t, offset: off_t) -> c.ssize_t ---
+	}
 
 	/*
 	Read the contents of a symbolic link.
@@ -765,35 +856,45 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/readlink.html ]]
 	*/
-	readlink :: proc(path: cstring, buf: [^]byte, bufsize: c.size_t) -> c.ssize_t ---
+	when ODIN_OS != .Linux {
+		readlink :: proc(path: cstring, buf: [^]byte, bufsize: c.size_t) -> c.ssize_t ---
+	}
 
 	/*
 	Equivalent to readlink but relative paths are resolved based on the dir fd.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/readlink.html ]]
 	*/
-	readlinkat :: proc(fd: FD, path: cstring, buf: [^]byte, bufsize: c.size_t) -> c.ssize_t ---
+	when ODIN_OS != .Linux {
+		readlinkat :: proc(fd: FD, path: cstring, buf: [^]byte, bufsize: c.size_t) -> c.ssize_t ---
+	}
 
 	/*
 	Set the effective group ID.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/setegid.html ]]
 	*/
-	setegid :: proc(gid: gid_t) -> result ---
+	when ODIN_OS != .Linux || !ODIN_NO_CRT {
+		setegid :: proc(gid: gid_t) -> result ---
+	}
 
 	/*
 	Sets the effective user ID.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/seteuid.html ]]
 	*/
-	seteuid :: proc(uid: uid_t) -> result ---
+	when ODIN_OS != .Linux || !ODIN_NO_CRT {
+		seteuid :: proc(uid: uid_t) -> result ---
+	}
 
 	/*
 	Sets the group ID.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/setgid.html ]]
 	*/
-	setgid :: proc(gid: gid_t) -> result ---
+	when ODIN_OS != .Linux || !ODIN_NO_CRT {
+		setgid :: proc(gid: gid_t) -> result ---
+	}
 
 	/*
 	Set process group ID.
@@ -811,21 +912,27 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/setpgrp.html ]]
 	*/
-	setpgrp :: proc() -> pid_t ---
+	when ODIN_OS != .Linux {
+		setpgrp :: proc() -> pid_t ---
+	}
 
 	/*
 	Set the real and effective group IDs.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/setregid.html ]]
 	*/
-	setregid :: proc(rgid: gid_t, egid: gid_t) -> result ---
+	when ODIN_OS != .Linux || !ODIN_NO_CRT {
+		setregid :: proc(rgid: gid_t, egid: gid_t) -> result ---
+	}
 
 	/*
 	Set real and effective user IDs.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/setreuid.html ]]
 	*/
-	setreuid :: proc(ruid: uid_t, euid: uid_t) -> result ---
+	when ODIN_OS != .Linux || !ODIN_NO_CRT {
+		setreuid :: proc(ruid: uid_t, euid: uid_t) -> result ---
+	}
 
 	/*
 	Create session and set process group ID.
@@ -843,7 +950,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/setuid.html ]]
 	*/
-	setuid :: proc(uid: uid_t) -> result ---
+	when ODIN_OS != .Linux || !ODIN_NO_CRT {
+		setuid :: proc(uid: uid_t) -> result ---
+	}
 
 	/*
 	Suspend execution for an interval of time.
@@ -852,14 +961,18 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sleep.html ]]
 	*/
-	sleep :: proc(seconds: c.uint) -> c.uint ---
+	when ODIN_OS != .Linux {
+		sleep :: proc(seconds: c.uint) -> c.uint ---
+	}
 
 	/*
 	Schedule file system updates.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sync.html ]]
 	*/
-	sync :: proc() ---
+	when ODIN_OS != .Linux {
+		sync :: proc() ---
+	}
 
 	/*
 	Get the foreground process group ID.
@@ -868,14 +981,18 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/tcgetpgrp.html ]]
 	*/
-	tcgetpgrp :: proc(fildes: FD) -> pid_t ---
+	when ODIN_OS != .Linux {
+		tcgetpgrp :: proc(fildes: FD) -> pid_t ---
+	}
 
 	/*
 	Set the foreground process group ID.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/tcsetpgrp.html ]]
 	*/
-	tcsetpgrp :: proc(fildes: FD, pgid_id: pid_t) -> result ---
+	when ODIN_OS != .Linux {
+		tcsetpgrp :: proc(fildes: FD, pgid_id: pid_t) -> result ---
+	}
 
 	/*
 	Find the path name of a terminal.
@@ -884,21 +1001,39 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/ttyname.html ]]
 	*/
-	ttyname :: proc(fildes: FD) -> cstring ---
+	when ODIN_OS != .Linux {
+		ttyname :: proc(fildes: FD) -> cstring ---
+	}
 
 	/*
 	Equivalent to ttyname but name is placed into the buf.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/ttyname.html ]]
 	*/
-	ttyname_r :: proc(fildes: FD, name: [^]byte, namesize: c.size_t) -> Errno ---
+	when ODIN_OS != .Linux {
+		ttyname_r :: proc(fildes: FD, name: [^]byte, namesize: c.size_t) -> Errno ---
+	}
 
 	/*
 	Equivalent to unlink or rmdir (if flag is .REMOVEDIR) but relative paths are relative to the dir fd.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/unlink.html ]]
 	*/
-	unlinkat :: proc(fd: FD, path: cstring, flag: AT_Flags) -> result ---
+	when ODIN_OS != .Linux {
+		unlinkat :: proc(fd: FD, path: cstring, flag: AT_Flags) -> result ---
+	}
+}
+}
+
+when ODIN_OS == .Linux && ODIN_NO_CRT {
+	// Native Linux imports no C library; bind the runtime-published
+	// table directly, the same symbol core/sys/_env observes under
+	// its own private alias. Managed Linux keeps the in-block
+	// declaration above, bound to the actual C environ.
+	foreign {
+		@(link_name="environ")
+		environ: [^]cstring
+	}
 }
 
 CS :: enum c.int {
@@ -1078,9 +1213,11 @@ when ODIN_OS == .NetBSD {
 	@(private) LFCHOWN :: "__posix_fchown"
 	@(private) LLCHOWN :: "__posix_lchown"
 } else {
-	@(private) LCHOWN  :: "chown"
-	@(private) LFCHOWN :: "fchown"
-	@(private) LLCHOWN :: "lchown"
+	when ODIN_OS != .Linux {
+		@(private) LCHOWN  :: "chown"
+		@(private) LFCHOWN :: "fchown"
+		@(private) LLCHOWN :: "lchown"
+	}
 }
 
 when ODIN_OS == .Darwin {

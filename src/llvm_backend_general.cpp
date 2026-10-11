@@ -137,6 +137,7 @@ gb_internal WORKER_TASK_PROC(lb_init_module_worker_proc) {
 	map_init(&m->types);
 	map_init(&m->func_raw_types);
 	map_init(&m->struct_field_remapping);
+	map_init(&m->linked_globals);
 	map_init(&m->values);
 	map_init(&m->soa_values);
 	string_map_init(&m->members);
@@ -3690,7 +3691,7 @@ gb_internal bool lb_apply_thread_local_model(LLVMValueRef value, String model) {
 
 		LLVMThreadLocalMode mode = LLVMGeneralDynamicTLSModel;
 		if (model == "default") {
-			mode = LLVMGeneralDynamicTLSModel;
+			mode = linux_no_crt_tls() ? LLVMLocalExecTLSModel : LLVMGeneralDynamicTLSModel;
 		} else if (model == "globaldynamic") {
 			mode = LLVMGeneralDynamicTLSModel;
 		} else if (model == "localdynamic") {
@@ -4178,6 +4179,9 @@ gb_internal lbValue lb_find_ident(lbProcedure *p, lbModule *m, Entity *e, Ast *e
 	if (e->kind == Entity_Procedure) {
 		return lb_find_procedure_value_from_entity(m, e);
 	}
+	if (e->kind == Entity_Variable && e->Variable.link_name_owner) {
+		return lb_emit_load(p, lb_find_linked_global(m, e));
+	}
 	if (USE_SEPARATE_MODULES) {
 		lbModule *other_module = lb_module_of_entity(m->gen, e, m);
 		if (other_module != m) {
@@ -4446,6 +4450,9 @@ gb_internal lbValue lb_find_value_from_entity(lbModule *m, Entity *e) {
 	rw_mutex_shared_unlock(&m->values_mutex);
 	if (found) {
 		return *found;
+	}
+	if (e->kind == Entity_Variable && e->Variable.link_name_owner) {
+		return lb_find_linked_global(m, e);
 	}
 
 	if (USE_SEPARATE_MODULES) {

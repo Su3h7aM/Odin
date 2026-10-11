@@ -148,7 +148,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/renameat.html ]]
 	*/
-	renameat :: proc(oldfd: FD, old: cstring, newfd: FD, new: cstring) -> result ---
+	when ODIN_OS != .Linux {
+		renameat :: proc(oldfd: FD, old: cstring, newfd: FD, new: cstring) -> result ---
+	}
 }
 
 when ODIN_OS == .Darwin {

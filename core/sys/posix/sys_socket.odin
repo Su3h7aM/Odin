@@ -5,7 +5,7 @@ import "core:c"
 
 when ODIN_OS == .Darwin {
 	foreign import libc "system:System"
-} else {
+} else when ODIN_OS != .Linux || size_of(rawptr) == 4 {
 	foreign import libc "system:c"
 }
 
@@ -21,8 +21,10 @@ foreign libc {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/socket.html ]]
 	*/
-	@(link_name=LSOCKET)
-	socket :: proc(domain: AF, type: Sock, protocol: Protocol = .IP) -> FD ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LSOCKET)
+		socket :: proc(domain: AF, type: Sock, protocol: Protocol = .IP) -> FD ---
+	}
 
 	/*
 	Extracts the first connection on the queue of pending connections.
@@ -33,7 +35,9 @@ foreign libc {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/accept.html ]]
 	*/
-	accept :: proc(socket: FD, address: ^sockaddr, address_len: ^socklen_t) -> FD ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		accept :: proc(socket: FD, address: ^sockaddr, address_len: ^socklen_t) -> FD ---
+	}
 
 	/*
 	Assigns a local socket address to the socket.
@@ -60,28 +64,36 @@ foreign libc {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/bind.html ]]
 	*/
-	bind :: proc(socket: FD, address: ^sockaddr, address_len: socklen_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		bind :: proc(socket: FD, address: ^sockaddr, address_len: socklen_t) -> result ---
+	}
 
 	/*
 	Attempt to make a connection.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/connect.html ]]
 	*/
-	connect :: proc(socket: FD, address: ^sockaddr, address_len: socklen_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		connect :: proc(socket: FD, address: ^sockaddr, address_len: socklen_t) -> result ---
+	}
 
 	/*
 	Get the peer address of the specified socket.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getpeername.html ]]
 	*/
-	getpeername :: proc(socket: FD, address: ^sockaddr, address_len: ^socklen_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		getpeername :: proc(socket: FD, address: ^sockaddr, address_len: ^socklen_t) -> result ---
+	}
 
 	/*
 	Get the socket name.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getsockname.html ]]
 	*/
-	getsockname :: proc(socket: FD, address: ^sockaddr, address_len: ^socklen_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		getsockname :: proc(socket: FD, address: ^sockaddr, address_len: ^socklen_t) -> result ---
+	}
 
 	/*
 	Retrieves the value for the option specified by option_name.
@@ -91,13 +103,15 @@ foreign libc {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getsockopt.html ]]
 	*/
-	getsockopt :: proc(
-		socket:       FD,
-		level:        c.int,
-		option_name:  Sock_Option,
-		option_value: rawptr,
-		option_len:   ^socklen_t,
-	) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		getsockopt :: proc(
+			socket:       FD,
+			level:        c.int,
+			option_name:  Sock_Option,
+			option_value: rawptr,
+			option_len:   ^socklen_t,
+		) -> result ---
+	}
 
 	/*
 	Sets the specified option.
@@ -107,13 +121,15 @@ foreign libc {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/setsockopt.html ]]
 	*/
-	setsockopt :: proc(
-		socket:       FD,
-		level:        c.int,
-		option_name:  Sock_Option,
-		option_value: rawptr,
-		option_len:   socklen_t,
-	) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		setsockopt :: proc(
+			socket:       FD,
+			level:        c.int,
+			option_name:  Sock_Option,
+			option_value: rawptr,
+			option_len:   socklen_t,
+		) -> result ---
+	}
 
 	/*
 	Mark the socket as a socket accepting connections.
@@ -124,7 +140,9 @@ foreign libc {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/listen.html ]]
 	*/
-	listen :: proc(socket: FD, backlog: c.int) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		listen :: proc(socket: FD, backlog: c.int) -> result ---
+	}
 
 	/*
 	Receives a message from a socket.
@@ -135,7 +153,9 @@ foreign libc {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/recv.html ]]
 	*/
-	recv :: proc(socket: FD, buffer: rawptr, length: c.size_t, flags: Msg_Flags) -> c.ssize_t ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		recv :: proc(socket: FD, buffer: rawptr, length: c.size_t, flags: Msg_Flags) -> c.ssize_t ---
+	}
 
 	/*
 	Receives a message from a socket.
@@ -146,14 +166,16 @@ foreign libc {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/recvfrom.html ]]
 	*/
-	recvfrom :: proc(
-		socket:      FD,
-		buffer:      rawptr,
-		length:      c.size_t,
-		flags:       Msg_Flags,
-		address:     ^sockaddr,
-		address_len: ^socklen_t,
-	) -> c.ssize_t ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		recvfrom :: proc(
+			socket:      FD,
+			buffer:      rawptr,
+			length:      c.size_t,
+			flags:       Msg_Flags,
+			address:     ^sockaddr,
+			address_len: ^socklen_t,
+		) -> c.ssize_t ---
+	}
 
 	/*
 	Receives a message from a socket.
@@ -162,7 +184,9 @@ foreign libc {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/recvmsg.html ]]
 	*/
-	recvmsg :: proc(socket: FD, message: ^msghdr, flags: Msg_Flags) -> c.ssize_t ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		recvmsg :: proc(socket: FD, message: ^msghdr, flags: Msg_Flags) -> c.ssize_t ---
+	}
 
 	/*
 	Sends a message on a socket.
@@ -171,7 +195,9 @@ foreign libc {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/send.html ]]
 	*/
-	send :: proc(socket: FD, buffer: rawptr, length: c.size_t, flags: Msg_Flags) -> c.ssize_t ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		send :: proc(socket: FD, buffer: rawptr, length: c.size_t, flags: Msg_Flags) -> c.ssize_t ---
+	}
 
 	/*
 	Sends a message on a socket.
@@ -180,7 +206,9 @@ foreign libc {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sendmsg.html ]]
 	*/
-	sendmsg :: proc(socket: FD, message: ^msghdr, flags: Msg_Flags) -> c.ssize_t ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		sendmsg :: proc(socket: FD, message: ^msghdr, flags: Msg_Flags) -> c.ssize_t ---
+	}
 
 	/*
 	Sends a message on a socket.
@@ -191,21 +219,25 @@ foreign libc {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sendto.html ]]
 	*/
-	sendto :: proc(
-		socket:    FD,
-		message:   rawptr,
-		length:    c.size_t,
-		flags:     Msg_Flags,
-		dest_addr: ^sockaddr,
-		dest_len:  socklen_t,
-	) -> c.ssize_t ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		sendto :: proc(
+			socket:    FD,
+			message:   rawptr,
+			length:    c.size_t,
+			flags:     Msg_Flags,
+			dest_addr: ^sockaddr,
+			dest_len:  socklen_t,
+		) -> c.ssize_t ---
+	}
 
 	/*
 	Shuts down a socket end or both.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/shutdown.html ]]
 	*/
-	shutdown :: proc(socket: FD, how: Shut) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		shutdown :: proc(socket: FD, how: Shut) -> result ---
+	}
 
 	/*
 	Determine wheter a socket is at the out-of-band mark.
@@ -214,14 +246,18 @@ foreign libc {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sockatmark.html ]]
 	*/
-	sockatmark :: proc(socket: FD) -> c.int ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		sockatmark :: proc(socket: FD) -> c.int ---
+	}
 
 	/*
 	Create a pair of connected sockets.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/socketpair.html ]]
 	*/
-	socketpair :: proc(domain: AF, type: Sock, protocol: Protocol, socket_vector: ^[2]FD) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		socketpair :: proc(domain: AF, type: Sock, protocol: Protocol, socket_vector: ^[2]FD) -> result ---
+	}
 }
 
 AF_UNSPEC :: 0
@@ -324,7 +360,7 @@ Sock_Option :: enum c.int {
 
 when ODIN_OS == .NetBSD {
 	@(private) LSOCKET :: "__socket30"
-} else {
+} else when ODIN_OS != .Linux || size_of(rawptr) == 4 {
 	@(private) LSOCKET :: "socket"
 }
 
@@ -432,7 +468,12 @@ when ODIN_OS == .Darwin || ODIN_OS == .FreeBSD || ODIN_OS == .NetBSD || ODIN_OS 
 
 	// Returns a pointer to the data array.
 	CMSG_DATA :: #force_inline proc "contextless" (cmsg: ^cmsghdr) -> [^]c.uchar {
-		return ([^]c.uchar)(uintptr(cmsg) + __ALIGN32(size_of(cmsghdr)))
+		when ODIN_OS == .Linux {
+			mask :: uintptr(size_of(c.long) - 1)
+			return ([^]c.uchar)(uintptr(cmsg) + ((size_of(cmsghdr) + mask) &~ mask))
+		} else {
+			return ([^]c.uchar)(uintptr(cmsg) + __ALIGN32(size_of(cmsghdr)))
+		}
 	}
 
 	// Returns a pointer to the next cmsghdr or nil.
@@ -441,8 +482,36 @@ when ODIN_OS == .Darwin || ODIN_OS == .FreeBSD || ODIN_OS == .NetBSD || ODIN_OS 
 			return CMSG_FIRSTHDR(mhdr)
 		}
 
-		ptr := uintptr(cmsg) + __ALIGN32(uintptr(cmsg.cmsg_len))
-		if ptr + __ALIGN32(size_of(cmsghdr)) > uintptr(mhdr.msg_control) + uintptr(mhdr.msg_controllen) {
+		ptr: uintptr
+		header_len: uintptr
+		when ODIN_OS == .Linux {
+			mask :: uintptr(size_of(c.long) - 1)
+			current_len := uintptr(cmsg.cmsg_len)
+			if current_len < size_of(cmsghdr) {
+				return nil
+			}
+			base := uintptr(mhdr.msg_control)
+			control_len := uintptr(mhdr.msg_controllen)
+			current := uintptr(cmsg)
+			if control_len > ~uintptr(0) - base || current < base {
+				return nil
+			}
+			end := base + control_len
+			if current > end {
+				return nil
+			}
+			remaining := end - current
+			padding := (uintptr(0) - current_len) & mask
+			size_needed := uintptr(size_of(cmsghdr)) + padding
+			if remaining < size_needed || remaining - size_needed < current_len {
+				return nil
+			}
+			return (^cmsghdr)(current + current_len + padding)
+		} else {
+			ptr = uintptr(cmsg) + __ALIGN32(uintptr(cmsg.cmsg_len))
+			header_len = __ALIGN32(size_of(cmsghdr))
+		}
+		if ptr + header_len > uintptr(mhdr.msg_control) + uintptr(mhdr.msg_controllen) {
 			return nil
 		}
 
@@ -487,8 +556,9 @@ when ODIN_OS == .Darwin || ODIN_OS == .FreeBSD || ODIN_OS == .NetBSD || ODIN_OS 
 		SO_TYPE       :: 3
 		SO_LINGER     :: 13
 
-		SO_RCVTIMEO   :: 66
-		SO_SNDTIMEO   :: 67
+		// The old Linux timeout options use the native timeval layout.
+		SO_RCVTIMEO   :: 20
+		SO_SNDTIMEO   :: 21
 	} else {
 		SOL_SOCKET :: 0xffff
 

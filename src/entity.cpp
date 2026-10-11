@@ -86,6 +86,7 @@ enum EntityFlag : u64 {
 	
 	EntityFlag_Require = 1ull<<50,
 	EntityFlag_ByPtr   = 1ull<<51, // enforce parameter is passed by pointer
+	EntityFlag_OwnedSatisfied = 1ull<<45, // foreign library whose reachable references all resolve without libc (owned-first selection)
 
 	EntityFlag_Overridden    = 1ull<<63,
 };
@@ -281,6 +282,8 @@ struct Entity {
 			String     link_prefix;
 			String     link_suffix;
 			String     link_section;
+			Entity *   link_name_owner; // resolved by the checker before dependency pruning
+			i64        link_name_align;
 			i64        custom_align;
 			CommentGroup *docs;
 			CommentGroup *comment;

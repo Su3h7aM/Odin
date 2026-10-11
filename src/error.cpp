@@ -1124,6 +1124,47 @@ gb_internal String error_article(String context_name) {
 
 gb_internal bool errors_already_printed = false;
 
+// Drops every buffered diagnostic without printing, so a superseded
+// checking run leaves nothing behind for the final run to repeat. Only
+// valid when nothing was printed yet; the caller guarantees the earlier
+// run never reached print_all_errors.
+gb_internal void reset_error_collector_for_recheck(void) {
+	for (ErrorValue &ev : global_error_collector.error_values) {
+		array_free(&ev.msg);
+	}
+	array_clear(&global_error_collector.error_values);
+	for (ErrorValue &ev : global_error_collector.held_error_values) {
+		array_free(&ev.msg);
+	}
+	array_clear(&global_error_collector.held_error_values);
+	global_error_collector.count.store(0);
+	global_error_collector.warning_count.store(0);
+	global_error_collector.held_count.store(0);
+	global_error_collector.held_warning_count.store(0);
+	global_error_collector.curr_error_value = {};
+	global_error_collector.curr_error_value_set.store(false);
+	errors_already_printed = false;
+}
+
+// Drops the global file id tables so a fresh parse reassigns ids to its
+// own files. Without this, entity file links, diagnostics positions, and
+// package scopes from a superseded run alias stale AstFiles at the same
+// small indices. Entries are references only; nothing here owns memory.
+gb_internal void reset_global_file_tables_for_recheck(void) {
+	mutex_lock(&global_files_mutex);
+	// Null-fill rather than array_clear: the setters only assign empty
+	// slots, and a cleared array keeps stale backing that would make
+	// every run-2 file alias its run-1 predecessor (use-after-free of
+	// per-file arrays freed post-merge). Counts stay so indices align.
+	for (isize i = 0; i < global_files.count; i++) {
+		global_files[i] = nullptr;
+	}
+	for (isize i = 0; i < global_file_path_strings.count; i++) {
+		global_file_path_strings[i] = {};
+	}
+	mutex_unlock(&global_files_mutex);
+}
+
 gb_internal void print_all_errors(void) {
 	if (errors_already_printed) {
 		if (global_error_collector.warning_count.load() == global_error_collector.error_values.count) {

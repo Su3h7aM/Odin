@@ -3,6 +3,8 @@ package posix
 
 import "core:c"
 
+_ :: lib
+
 when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
 } else {
@@ -27,29 +29,35 @@ foreign lib {
 	// NOTE: returns a static string overwritten by further calls.
 	//
 	// [[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/inet_ntoa.html ]]
-	inet_ntoa :: proc(in_addr) -> cstring ---
+	when ODIN_OS != .Linux {
+		inet_ntoa :: proc(in_addr) -> cstring ---
+	}
 
 	// Convert a numeric address into a text string suitable for presentation.
 	//
 	// Returns `nil` and sets `errno` on failure.
 	//
 	// [[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/inet_ntop.html ]]
-	inet_ntop :: proc(
-		af:   AF,        // INET or INET6
-		src:  rawptr,    // either ^in_addr or ^in_addr6 
-		dst:  [^]byte,   // use `INET_ADDRSTRLEN` or `INET6_ADDRSTRLEN` for minimum lengths
-		size: socklen_t,
-	) -> cstring ---
+	when ODIN_OS != .Linux {
+		inet_ntop :: proc(
+			af:   AF,        // INET or INET6
+			src:  rawptr,    // either ^in_addr or ^in_addr6 
+			dst:  [^]byte,   // use `INET_ADDRSTRLEN` or `INET6_ADDRSTRLEN` for minimum lengths
+			size: socklen_t,
+		) -> cstring ---
+	}
 
 	// Convert an address in its standard text presentation form into its numeric binary form.
 	//
 	// [[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/inet_ntop.html ]]
-	inet_pton :: proc(
-		af:   AF,        // INET or INET6
-		src:  cstring,
-		dst:  rawptr,    // either ^in_addr or ^in_addr6
-	) -> pton_result ---
-}
+	when ODIN_OS != .Linux {
+		inet_pton :: proc(
+			af:   AF,        // INET or INET6
+			src:  cstring,
+			dst:  rawptr,    // either ^in_addr or ^in_addr6
+		) -> pton_result ---
+	}
+	}
 
 pton_result :: enum c.int {
 	AFNOSUPPORT = -1,

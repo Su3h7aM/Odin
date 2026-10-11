@@ -3,7 +3,7 @@ package posix
 
 when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
-} else {
+} else when ODIN_OS != .Linux {
 	foreign import lib "system:c"
 }
 
@@ -15,8 +15,10 @@ foreign lib {
 
 	Returns: -1 (setting errno) on failure, the elapsed real time, since an arbitrary point in the past
 	*/
-	@(link_name=LTIMES)
-	times :: proc(buffer: ^tms) -> clock_t ---
+	when ODIN_OS != .Linux {
+		@(link_name=LTIMES)
+		times :: proc(buffer: ^tms) -> clock_t ---
+	}
 }
 
 when ODIN_OS == .NetBSD {

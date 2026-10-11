@@ -5,7 +5,7 @@ import "core:c"
 
 when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
-} else {
+} else when ODIN_OS != .Linux {
 	foreign import lib "system:c"
 }
 
@@ -22,7 +22,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/ulimit.html ]]
 	*/
-	ulimit :: proc(i: c.int, #c_vararg arg: ..c.long) -> c.long ---
+	when ODIN_OS != .Linux {
+		ulimit :: proc(i: c.int, #c_vararg arg: ..c.long) -> c.long ---
+	}
 }
 
 Ulimit_Cmd :: enum c.int {

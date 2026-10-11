@@ -161,7 +161,9 @@ printf    :: libc.printf
 putc      :: libc.puts
 putchar   :: libc.putchar
 puts      :: libc.puts
-remove    :: libc.remove
+when ODIN_OS != .Linux {
+	remove :: libc.remove
+}
 rename    :: libc.rename
 rewind    :: libc.rewind
 scanf     :: libc.scanf

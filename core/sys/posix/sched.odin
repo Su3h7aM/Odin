@@ -5,7 +5,7 @@ import "core:c"
 
 when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
-} else {
+} else when ODIN_OS != .Linux || size_of(rawptr) == 4 {
 	foreign import lib "system:c"
 }
 
@@ -13,25 +13,33 @@ when ODIN_OS == .Darwin {
 
 foreign lib {
 	/*
-	Returns the minimum for the given scheduling policy.
-
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sched_get_priority_max.html ]]
-	*/
-	sched_get_priority_max :: proc(policy: Sched_Policy) -> c.int ---
-
-	/*
-	Returns the maximum for the given scheduling policy.
+	Returns the maximum priority for the given scheduling policy.
 
 	Returns: -1 (setting errno) on failure, the maximum on success
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sched_get_priority_max.html ]]
 	*/
-	sched_get_priority_min :: proc(policy: Sched_Policy) -> c.int ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		sched_get_priority_max :: proc(policy: Sched_Policy) -> c.int ---
+	}
+
+	/*
+	Returns the minimum priority for the given scheduling policy.
+
+	Returns: -1 (setting errno) on failure, the minimum on success
+
+	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sched_get_priority_min.html ]]
+	*/
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		sched_get_priority_min :: proc(policy: Sched_Policy) -> c.int ---
+	}
 
 	/*
 	Forces the running thread to relinquish the processor until it again becomes the head of its thread list.
 	*/
-	sched_yield :: proc() -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		sched_yield :: proc() -> result ---
+	}
 
 	/* NOTE: unimplemented on darwin (I think?).
 	/*

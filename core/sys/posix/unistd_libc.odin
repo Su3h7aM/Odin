@@ -25,8 +25,10 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/access.html ]]
 	*/
-	@(link_name=LACCESS)
-	access :: proc(path: cstring, amode: Mode_Flags = F_OK) -> result ---
+	when ODIN_OS != .Linux {
+		@(link_name=LACCESS)
+		access :: proc(path: cstring, amode: Mode_Flags = F_OK) -> result ---
+	}
 
 	/*
 	Causes the directory named by path to become the current working directory.
@@ -38,8 +40,10 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/chdir.html ]]
 	*/
-	@(link_name=LCHDIR)
-	chdir :: proc(path: cstring) -> result ---
+	when ODIN_OS != .Linux {
+		@(link_name=LCHDIR)
+		chdir :: proc(path: cstring) -> result ---
+	}
 
 	/*
 	Exits but, shall not call functions registered with atexit() nor any registered signal handlers.
@@ -48,7 +52,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/_exit.html ]]
 	*/
-	_exit :: proc(status: c.int) -> ! ---
+	when ODIN_OS != .Linux {
+		_exit :: proc(status: c.int) -> ! ---
+	}
 
 	/*
 	Places an absolute pathname of the current working directory into buf.
@@ -86,16 +92,20 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/getcwd.html ]]
 	*/
-	@(link_name=LGETCWD)
-	getcwd :: proc(buf: [^]c.char, size: c.size_t) -> cstring ---
+	when ODIN_OS != .Linux {
+		@(link_name=LGETCWD)
+		getcwd :: proc(buf: [^]c.char, size: c.size_t) -> cstring ---
+	}
 
 	/*
 	Remove an (empty) directory.
 
 	]] More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/rmdir.html ]]
 	*/
-	@(link_name=LRMDIR)
-	rmdir :: proc(path: cstring) -> result ---
+	when ODIN_OS != .Linux {
+		@(link_name=LRMDIR)
+		rmdir :: proc(path: cstring) -> result ---
+	}
 
 	/*
 	Copy nbyte bytes, from src, to dest, exchanging adjecent bytes.
@@ -110,8 +120,10 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/unlink.html ]]
 	*/
-	@(link_name=LUNLINK)
-	unlink :: proc(path: cstring) -> result ---
+	when ODIN_OS != .Linux {
+		@(link_name=LUNLINK)
+		unlink :: proc(path: cstring) -> result ---
+	}
 }
 
 when ODIN_OS == .Windows {
@@ -122,12 +134,16 @@ when ODIN_OS == .Windows {
 	@(private) LSWAB   :: "_swab"
 	@(private) LUNLINK :: "_unlink"
 } else {
-	@(private) LACCESS :: "access"
-	@(private) LCHDIR  :: "chdir"
-	@(private) LGETCWD :: "getcwd"
-	@(private) LRMDIR  :: "rmdir"
+	when ODIN_OS != .Linux {
+		@(private) LACCESS :: "access"
+		@(private) LCHDIR  :: "chdir"
+		@(private) LGETCWD :: "getcwd"
+	}
+	when ODIN_OS != .Linux {
+		@(private) LRMDIR  :: "rmdir"
+		@(private) LUNLINK :: "unlink"
+	}
 	@(private) LSWAB   :: "swab"
-	@(private) LUNLINK :: "unlink"
 }
 
 STDERR_FILENO :: 2

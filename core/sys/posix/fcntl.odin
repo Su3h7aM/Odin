@@ -5,7 +5,7 @@ import "core:c"
 
 when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
-} else {
+} else when ODIN_OS != .Linux {
 	foreign import lib "system:c"
 }
 
@@ -17,14 +17,18 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/creat.html ]]
 	*/
-	creat :: proc(path: cstring, mode: mode_t) -> FD ---
+	when ODIN_OS != .Linux {
+		creat :: proc(path: cstring, mode: mode_t) -> FD ---
+	}
 
 	/*
 	Perform the operations on open files.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fcntl.html ]]
 	*/
-	fcntl :: proc(fd: FD, cmd: FCNTL_Cmd, #c_vararg args: ..any) -> c.int ---
+	when ODIN_OS != .Linux {
+		fcntl :: proc(fd: FD, cmd: FCNTL_Cmd, #c_vararg args: ..any) -> c.int ---
+	}
 
 	/*
 	Establish the connection between a file and a file descriptor.
@@ -59,7 +63,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html ]]
 	*/
-	open :: proc(path: cstring, flags: O_Flags, #c_vararg mode: ..mode_t) -> FD ---
+	when ODIN_OS != .Linux {
+		open :: proc(path: cstring, flags: O_Flags, #c_vararg mode: ..mode_t) -> FD ---
+	}
 
 	/*
 	Equivalent to the open() function except in the case where path specifies a relative path.
@@ -70,7 +76,32 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/open.html ]]
 	*/
-	openat :: proc(fd: FD, path: cstring, flags: O_Flags, #c_vararg mode: ..mode_t) -> FD ---
+	when ODIN_OS != .Linux {
+		openat :: proc(fd: FD, path: cstring, flags: O_Flags, #c_vararg mode: ..mode_t) -> FD ---
+	}
+
+	when ODIN_OS == .FreeBSD || ODIN_OS == .NetBSD {
+		/*
+		Ensure that disk space is allocated for the bytes in the range starting at
+		offset and continuing for len bytes. If the file is smaller than offset+len,
+		it is extended.
+
+		Returns: the error number, without setting errno.
+
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_fallocate.html ]]
+		*/
+		posix_fallocate :: proc(fd: FD, offset: off_t, len: off_t) -> Errno ---
+
+		/*
+		Announce an intention to access the file data in a specific pattern, allowing
+		the kernel to perform appropriate optimizations. The advice is not binding.
+
+		Returns: the error number, without setting errno.
+
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_fadvise.html ]]
+		*/
+		posix_fadvise :: proc(fd: FD, offset: off_t, len: off_t, advice: FAdvice) -> Errno ---
+	}
 }
 
 FCNTL_Cmd :: enum c.int {
@@ -91,6 +122,17 @@ Lock_Type :: enum c.short {
 	RDLCK = F_RDLCK,
 	UNLCK = F_UNLCK,
 	WRLCK = F_WRLCK,
+}
+
+when ODIN_OS == .Linux || ODIN_OS == .FreeBSD || ODIN_OS == .NetBSD {
+	FAdvice :: enum c.int {
+		DONTNEED   = POSIX_FADV_DONTNEED,
+		NOREUSE    = POSIX_FADV_NOREUSE,
+		NORMAL     = POSIX_FADV_NORMAL,
+		RANDOM     = POSIX_FADV_RANDOM,
+		SEQUENTIAL = POSIX_FADV_SEQUENTIAL,
+		WILLNEED   = POSIX_FADV_WILLNEED,
+	}
 }
 
 O_Flag_Bits :: enum c.int {
@@ -230,6 +272,13 @@ when ODIN_OS == .Darwin {
 	F_GETOWN        :: 5
 	F_SETOWN        :: 6
 
+	POSIX_FADV_DONTNEED   :: 4
+	POSIX_FADV_NOREUSE    :: 5
+	POSIX_FADV_NORMAL     :: 0
+	POSIX_FADV_RANDOM     :: 1
+	POSIX_FADV_SEQUENTIAL :: 2
+	POSIX_FADV_WILLNEED   :: 3
+
 	FD_CLOEXEC :: 1
 
 	F_RDLCK :: 1
@@ -294,6 +343,13 @@ when ODIN_OS == .Darwin {
 	F_SETLKW        :: 9
 	F_GETOWN        :: 5
 	F_SETOWN        :: 6
+
+	POSIX_FADV_DONTNEED   :: 4
+	POSIX_FADV_NOREUSE    :: 5
+	POSIX_FADV_NORMAL     :: 0
+	POSIX_FADV_RANDOM     :: 1
+	POSIX_FADV_SEQUENTIAL :: 2
+	POSIX_FADV_WILLNEED   :: 3
 
 	FD_CLOEXEC :: 1
 
@@ -430,14 +486,26 @@ when ODIN_OS == .Darwin {
 
 	F_DUPFD_CLOEXEC :: 1030
 
+	POSIX_FADV_DONTNEED   :: 4
+	POSIX_FADV_NOREUSE    :: 5
+	POSIX_FADV_NORMAL     :: 0
+	POSIX_FADV_RANDOM     :: 1
+	POSIX_FADV_SEQUENTIAL :: 2
+	POSIX_FADV_WILLNEED   :: 3
+
 	FD_CLOEXEC :: 1
 
 	O_CREAT     :: 0o0_000_100
 	O_EXCL      :: 0o0_000_200
 	O_NOCTTY    :: 0o0_000_400
 	O_TRUNC     :: 0o0_001_000
-	O_DIRECTORY :: 0o0_200_000
-	O_NOFOLLOW  :: 0o0_400_000
+	when ODIN_ARCH == .arm64 || ODIN_ARCH == .arm32 {
+		O_DIRECTORY :: 0o0_040_000
+		O_NOFOLLOW  :: 0o0_100_000
+	} else {
+		O_DIRECTORY :: 0o0_200_000
+		O_NOFOLLOW  :: 0o0_400_000
+	}
 	O_CLOEXEC   :: 0o2_000_000
 
 	_O_TTY_INIT :: 0

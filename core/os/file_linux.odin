@@ -7,7 +7,6 @@ import "core:time"
 import "core:sync"
 import "core:strings"
 import "core:sys/linux"
-import "core:sys/posix"
 
 // Most implementations will EINVAL at some point when doing big writes.
 // In practice a read/write call would probably never read/write these big buffers all at once,
@@ -195,8 +194,9 @@ _is_tty :: proc "contextless" (f: ^File) -> bool {
 	// Raw TCGETS probe, cf. `isatty(3)`: the kernel copies out the terminal
 	// attributes on success and fails with ENOTTY otherwise. No libc call,
 	// so this backend links nothing from it.
-	termios: posix.termios
-	return linux.ioctl(impl.fd, linux.TCGETS, uintptr(rawptr(&termios))) == 0
+	termios: linux.Termios
+	_, err := linux.ioctl(impl.fd, linux.TCGETS, uintptr(rawptr(&termios)))
+	return err == .NONE
 }
 
 _name :: proc(f: ^File) -> string {

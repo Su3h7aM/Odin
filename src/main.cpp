@@ -76,6 +76,8 @@ gb_global Timings global_timings = {0};
 
 #include "llvm_backend.cpp"
 
+#include "no_crt_selection.cpp"
+
 #include "bug_report.cpp"
 
 #if defined(GB_SYSTEM_OSX) || defined(GB_SYSTEM_UNIX)
@@ -86,6 +88,11 @@ int run_subprocess(const char *name, const char **args, bool honor_path = false)
 gb_internal i32 system_exec_command_line_app_internal(bool exit_on_err, char const *name, char const *fmt, va_list va) {
 	isize const cmd_cap = 64<<20; // 64 MiB should be more than enough
 	char *cmd_line = gb_alloc_array(gb_heap_allocator(), char, cmd_cap);
+	// The print-linker-flags branch below advances cmd_line, so the
+	// scoped free must target this unmoved base, which also covers
+	// that branch's early return.
+	char *cmd_line_base = cmd_line;
+	defer (gb_free(gb_heap_allocator(), cmd_line_base));
 	isize cmd_len = 0;
 	i32 exit_code = 0;
 
@@ -156,6 +163,9 @@ gb_internal i32 system_exec_command_line_app_internal(bool exit_on_err, char con
 
 	int argc;
 	char **argv = command_line_to_spawn_argv(cmd_line, &argc);
+	// Single heap block holding both the pointer array and the text;
+	// dead after run_subprocess returns, same as cmd_line above.
+	defer (gb_free(gb_heap_allocator(), argv));
 
 	exit_code = run_subprocess(argv[0], cast(const char**)(argv), true);
 	if (exit_on_err && WIFSIGNALED(exit_code)) {
@@ -1480,6 +1490,7 @@ gb_internal bool parse_build_flags(Array<String> args) {
 							break;
 						case BuildFlag_NoCRT:
 							build_context.no_crt = true;
+							build_context.explicit_no_crt = true;
 							break;
 						case BuildFlag_NoRPath:
 							build_context.no_rpath = true;
@@ -2880,6 +2891,9 @@ gb_internal void remove_temp_files(lbGenerator *gen) {
 	for (String const &path : gen->output_temp_paths) {
 		gb_file_remove(cast(char const *)path.text);
 	}
+
+	// Provider-selection proof objects share the linked-object lifecycle.
+	linker_verified_asm_cleanup();
 
 	if (!build_context.keep_object_files) {
 		switch (build_context.build_mode) {
@@ -4569,6 +4583,19 @@ int main(int arg_count, char const **arg_ptr) {
 			get_fullpath_relative(heap_allocator(), odin_root_dir(), str_lit("shared"), nullptr));
 	}
 
+	// Owned-first automatic selection: check with the owned profile on the
+	// narrow auto envelope so profile-selected implementations (threads,
+	// env, POSIX) resolve owned from the start. Explicit -no-crt keeps its
+	// strict single pass; everything else keeps the managed default here.
+	// This must precede init_build_context: reloc derivation and the
+	// envelope checks below read the provisional profile.
+	bool auto_provisional_owned = false;
+	bool auto_derived_reloc = false;
+	if (!build_context.explicit_no_crt && auto_owned_envelope_eligible()) {
+		build_context.no_crt = true;
+		auto_provisional_owned = true;
+		auto_derived_reloc = true;
+	}
 	init_build_context(selected_target_metrics ? selected_target_metrics->metrics : nullptr, selected_subtarget);
 	// if (build_context.word_size == 4 && build_context.metrics.os != TargetOs_js) {
 	// 	print_usage_line(0, "%.*s 32-bit is not yet supported for this platform", LIT(args[0]));
@@ -4742,6 +4769,12 @@ int main(int arg_count, char const **arg_ptr) {
 	init_global_thread_pool();
 	defer (thread_pool_destroy(&global_thread_pool));
 
+	// An automatic owned-first build may discard its whole provisional
+	// parse/check on managed fallback; mark every arena now so the
+	// fallback can release the superseded graph at once. The marks are
+	// inert data otherwise: other paths never consume them.
+	trial_arena_checkpoint_all();
+
 	TIME_SECTION("init universal");
 	init_universal();
 	// TODO(bill): prevent compiling without a linker
@@ -4778,7 +4811,14 @@ int main(int arg_count, char const **arg_ptr) {
 	release_held_errors();
 	defer (destroy_checker(checker));
 
-	if (build_context.cached && parser->total_seen_load_directive_count.load() == 0) {
+	// Declared before any goto so the cached-build fast path can bypass the
+	// selection below without crossing an initialization.
+	bool selection_ready = true;
+	// The pre-check fast path is skipped for automatic builds: its key
+	// cannot yet record the final profile, and selection must verify the
+	// graph every time. The post-check path still applies with the final
+	// profile compared explicitly.
+	if (build_context.cached && !auto_provisional_owned && parser->total_seen_load_directive_count.load() == 0) {
 		MAIN_TIME_SECTION("check cached build (pre-semantic check)");
 		if (try_cached_build(checker, args)) {
 			goto end_of_code_gen;
@@ -4787,17 +4827,44 @@ int main(int arg_count, char const **arg_ptr) {
 
 	MAIN_TIME_SECTION("type check");
 	check_parsed_files(checker);
-	if (!build_context.ignore_unused_defineables) {
+	// Owned-first selection finalizes here, before anything consumes the
+	// checked graph: with no reachable libc requirement the provisional
+	// owned profile stands with a truthful ODIN_NO_CRT, otherwise a full
+	// managed recheck replaces it. Diagnostics stay buffered until the
+	// final run, and the fallback is only visible in timings/verbose
+	// channels, never as user-facing output.
+	if (auto_provisional_owned) {
+		MAIN_TIME_SECTION("finalize owned-first provider selection");
+		// The derived metrics are authoritative; a mismatch with the
+		// pre-init envelope reading falls back rather than committing.
+		bool metrics_match = build_context.metrics.os == TargetOs_linux &&
+		                     build_context.metrics.arch == TargetArch_amd64;
+		if (!metrics_match) {
+			build_context.no_crt = false;
+			selection_ready = reparse_and_recheck_managed(&parser, &checker, init_filename, &failed_to_cache_parsing, auto_derived_reloc);
+		} else if (any_errors()) {
+			selection_ready = reparse_and_recheck_managed(&parser, &checker, init_filename, &failed_to_cache_parsing, auto_derived_reloc);
+		} else {
+			AutoSelection sel = classify_reachable_requirements(checker);
+			// Verified C, opaque-input, and candidate-gap references
+			// alike fall back to managed; only the attribution differs.
+			if (sel.real_count != 0 || sel.opaque_count != 0 || sel.gap_count != 0) {
+				selection_ready = reparse_and_recheck_managed(&parser, &checker, init_filename, &failed_to_cache_parsing, auto_derived_reloc);
+			}
+		}
+	}
+	if (selection_ready && !build_context.ignore_unused_defineables) {
 		check_defines(&build_context, checker);
 	}
 
-	if (build_context.export_semantics_format != SemanticsFormat_Invalid) {
+	if (selection_ready && build_context.export_semantics_format != SemanticsFormat_Invalid) {
 		MAIN_TIME_SECTION("export semantics");
 		export_semantics(checker);
 	}
 
 	if (any_errors()) {
 		print_all_errors();
+		linker_verified_asm_cleanup();
 		return 1;
 	}
 	if (any_warnings()) {
@@ -4825,6 +4892,7 @@ int main(int arg_count, char const **arg_ptr) {
 	if (build_context.generate_docs) {
 		MAIN_TIME_SECTION("generate documentation");
 		if (global_error_collector.count != 0) {
+			linker_verified_asm_cleanup();
 			return 1;
 		}
 		generate_documentation(checker);
@@ -4835,6 +4903,7 @@ int main(int arg_count, char const **arg_ptr) {
 		if (build_context.show_import_graph) {
 			show_import_graph(checker);
 		}
+		linker_verified_asm_cleanup();
 		return 0;
 	}
 
@@ -4851,15 +4920,18 @@ int main(int arg_count, char const **arg_ptr) {
 		}
 
 		if (global_error_collector.count != 0) {
+			linker_verified_asm_cleanup();
 			return 1;
 		}
 
+		linker_verified_asm_cleanup();
 		return 0;
 	}
 
 	if (build_context.cached) {
 		MAIN_TIME_SECTION("check cached build");
 		if (try_cached_build(checker, args)) {
+			linker_verified_asm_cleanup();
 			goto end_of_code_gen;
 		}
 		failed_to_cache_parsing = true;
@@ -4868,6 +4940,7 @@ int main(int arg_count, char const **arg_ptr) {
 	{
 		lbGenerator *gen = permanent_alloc_item<lbGenerator>();
 		if (!lb_init_generator(gen, checker)) {
+			linker_verified_asm_cleanup();
 			return 1;
 		}
 
@@ -4893,6 +4966,15 @@ int main(int arg_count, char const **arg_ptr) {
 					if (build_context.export_dependencies_format != DependenciesExportUnspecified) {
 						export_dependencies(checker);
 					}
+					// A failed link leaves no usable output; drop its
+					// temporary objects exactly as the success path
+					// does, honoring the same keep flag.
+					if (!build_context.keep_object_files) {
+						for (String const &path : gen->output_object_paths) {
+							gb_file_remove(cast(char const *)path.text);
+						}
+					}
+					linker_verified_asm_cleanup();
 					return result;
 				} else {
 					if (build_context.export_linked_libs_path != "") {
@@ -4908,6 +4990,7 @@ int main(int arg_count, char const **arg_ptr) {
 
 	if (any_errors()) {
 		print_all_errors();
+		linker_verified_asm_cleanup();
 		return 1;
 	}
 	if (any_warnings()) {

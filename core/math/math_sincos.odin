@@ -125,6 +125,12 @@ sincos_f64be :: proc "contextless" (x: f64be) -> (sin, cos: f64be) #no_bounds_ch
 }
 
 sincos_f64 :: proc "contextless" (x: f64) -> (sin, cos: f64) #no_bounds_check {
+	when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+		// Owned Linux amd64 implementation lives in the base runtime so
+		// direct LLVM-intrinsic consumers without a `core:math` import are
+		// covered too; every other target uses the kernel below unchanged.
+		return native_sincos_f64(x)
+	}
 	x := x
 
 	PI4A :: 0h3fe921fb40000000 // 7.85398125648498535156e-1  PI/4 split into three parts

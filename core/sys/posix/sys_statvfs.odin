@@ -5,7 +5,7 @@ import "core:c"
 
 when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
-} else {
+} else when ODIN_OS != .Linux || size_of(rawptr) == 4 {
 	foreign import lib "system:c"
 }
 
@@ -18,16 +18,20 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/statvfs.html ]]
 	*/
-	@(link_name=LFSTATVFS)
-	fstatvfs :: proc(fildes: FD, buf: ^statvfs_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LFSTATVFS)
+		fstatvfs :: proc(fildes: FD, buf: ^statvfs_t) -> result ---
+	}
 
 	/*
 	Obtains information about the file system containing the file named by path.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/statvfs.html ]]
 	*/
-	@(link_name=LSTATVFS)
-	statvfs :: proc(path: cstring, buf: ^statvfs_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LSTATVFS)
+		statvfs :: proc(path: cstring, buf: ^statvfs_t) -> result ---
+	}
 }
 
 VFS_Flag_Bits :: enum c.ulong {

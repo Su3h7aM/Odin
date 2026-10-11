@@ -5,7 +5,7 @@ import "core:c"
 
 when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
-} else {
+} else when ODIN_OS != .Linux {
 	foreign import lib "system:c"
 }
 
@@ -19,7 +19,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/wait.html ]]
 	*/
-	wait :: proc(stat_loc: ^c.int) -> pid_t ---
+	when ODIN_OS != .Linux {
+		wait :: proc(stat_loc: ^c.int) -> pid_t ---
+	}
 
 	/*
 	Obtains status information pertaining to the given pid specifier.
@@ -76,7 +78,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/wait.html ]]
 	*/
-	waitpid :: proc(pid: pid_t, stat_loc: ^c.int, options: Wait_Flags) -> pid_t ---
+	when ODIN_OS != .Linux {
+		waitpid :: proc(pid: pid_t, stat_loc: ^c.int, options: Wait_Flags) -> pid_t ---
+	}
 
 	/*
 	Obtains status information pertaining to the given idtype_t and id specifier.
@@ -85,7 +89,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/waitid.html ]]
 	*/
-	waitid :: proc(idtype: idtype_t, id: id_t, infop: ^siginfo_t, options: Wait_Flags) -> c.int ---
+	when ODIN_OS != .Linux {
+		waitid :: proc(idtype: idtype_t, id: id_t, infop: ^siginfo_t, options: Wait_Flags) -> c.int ---
+	}
 }
 
 // If terminated normally.
@@ -420,7 +426,9 @@ when ODIN_OS == .Darwin {
 
 	@(private)
 	_WIFSIGNALED :: #force_inline proc "contextless" (x: c.int) -> bool {
-		return (x & 0xffff) - 1 < 0xff
+		// The low 7 bits hold the terminating signal: 0 means exited,
+		// 0x7f means stopped.
+		return (x & 0x7f) != 0 && (x & 0x7f) != 0x7f
 	}
 
 	@(private)
@@ -430,7 +438,8 @@ when ODIN_OS == .Darwin {
 
 	@(private)
 	_WIFSTOPPED :: #force_inline proc "contextless" (x: c.int) -> bool {
-		return ((x & 0xffff) * 0x10001) >> 8 > 0x7f00
+		// A stopped child reports 0x7f in the low byte.
+		return (x & 0xff) == 0x7f
 	}
 
 	@(private)

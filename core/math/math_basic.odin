@@ -43,41 +43,77 @@ foreign _ {
 
 @(require_results)
 sin_f16 :: proc "contextless" (θ: f16) -> f16 {
-	return _sin_f16(θ)
+	when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+		return native_sin_f16(θ)
+	} else {
+		return _sin_f16(θ)
+	}
 }
 @(require_results)
 sin_f32 :: proc "contextless" (θ: f32) -> f32 {
-	return _sin_f32(θ)
+	when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+		return native_sin_f32(θ)
+	} else {
+		return _sin_f32(θ)
+	}
 }
 @(require_results)
 sin_f64 :: proc "contextless" (θ: f64) -> f64 {
-	return _sin_f64(θ)
+	when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+		return native_sin_f64(θ)
+	} else {
+		return _sin_f64(θ)
+	}
 }
 
 @(require_results)
 cos_f16 :: proc "contextless" (θ: f16) -> f16 {
-	return _cos_f16(θ)
+	when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+		return native_cos_f16(θ)
+	} else {
+		return _cos_f16(θ)
+	}
 }
 @(require_results)
 cos_f32 :: proc "contextless" (θ: f32) -> f32 {
-	return _cos_f32(θ)
+	when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+		return native_cos_f32(θ)
+	} else {
+		return _cos_f32(θ)
+	}
 }
 @(require_results)
 cos_f64 :: proc "contextless" (θ: f64) -> f64 {
-	return _cos_f64(θ)
+	when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+		return native_cos_f64(θ)
+	} else {
+		return _cos_f64(θ)
+	}
 }
 
 @(require_results)
 pow_f16 :: proc "contextless" (x, power: f16) -> f16 {
-	return _pow_f16(x, power)
+	when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+		return native_pow_f16(x, power)
+	} else {
+		return _pow_f16(x, power)
+	}
 }
 @(require_results)
 pow_f32 :: proc "contextless" (x, power: f32) -> f32 {
-	return _pow_f32(x, power)
+	when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+		return native_pow_f32(x, power)
+	} else {
+		return _pow_f32(x, power)
+	}
 }
 @(require_results)
 pow_f64 :: proc "contextless" (x, power: f64) -> f64 {
-	return _pow_f64(x, power)
+	when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+		return native_pow_f64(x, power)
+	} else {
+		return _pow_f64(x, power)
+	}
 }
 
 @(require_results)
@@ -95,15 +131,27 @@ fmuladd_f64 :: proc "contextless" (a, b, c: f64) -> f64 {
 
 @(require_results)
 exp_f16 :: proc "contextless" (x: f16) -> f16 {
-	return _exp_f16(x)
+	when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+		return native_exp_f16(x)
+	} else {
+		return _exp_f16(x)
+	}
 }
 @(require_results)
 exp_f32 :: proc "contextless" (x: f32) -> f32 {
-	return _exp_f32(x)
+	when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+		return native_exp_f32(x)
+	} else {
+		return _exp_f32(x)
+	}
 }
 @(require_results)
 exp_f64 :: proc "contextless" (x: f64) -> f64 {
-	return _exp_f64(x)
+	when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+		return native_exp_f64(x)
+	} else {
+		return _exp_f64(x)
+	}
 }
 
 

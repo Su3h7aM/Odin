@@ -20,6 +20,13 @@ CLOCK_MONOTONIC_RAW :: 4 // NOTE(tetra): "RAW" means: Not adjusted by NTP.
 
 @(no_instrumentation)
 _tick_now :: proc "contextless" () -> (ns: i64) {
-	t, _ := linux.clock_gettime(.MONOTONIC_RAW)
-	return i64(t.time_sec)*1e9 + i64(t.time_nsec)
+	// Reads through the kernel vDSO on amd64, falling back to the raw
+	// system call everywhere else. Same clock, same units.
+	when ODIN_ARCH == .amd64 {
+		t, _ := linux.clock_gettime_fast(.MONOTONIC_RAW)
+		return i64(t.time_sec)*1e9 + i64(t.time_nsec)
+	} else {
+		t, _ := linux.clock_gettime(.MONOTONIC_RAW)
+		return i64(t.time_sec)*1e9 + i64(t.time_nsec)
+	}
 }

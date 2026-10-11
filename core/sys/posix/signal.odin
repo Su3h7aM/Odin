@@ -57,6 +57,9 @@ foreign lib {
 
 	As with kill, if sig is 0, only validation (of the pthread_t given) is done and no signal is sent.
 
+	This is libc's: a `pthread_t` is a libc thread handle, and `core:thread` does not create them
+	without libc, so there is no Linux system call version and it does not link with `-no-crt`.
+
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/pthread_kill.html ]]
 	*/
 	pthread_kill :: proc(thread: pthread_t, sig: Signal) -> Errno ---
@@ -68,7 +71,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/pthread_sigmask.html ]]
 	*/
-	pthread_sigmask :: proc(how: Sig, set: ^sigset_t, oset: ^sigset_t) -> Errno ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		pthread_sigmask :: proc(how: Sig, set: ^sigset_t, oset: ^sigset_t) -> Errno ---
+	}
 
 	/*
 	Examine and change blocked signals in a single-threaded process.
@@ -122,22 +127,28 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigaltstack.html ]]
 	*/
-	@(link_name=LSIGALTSTACK)
-	sigaltstack :: proc(ss: ^stack_t, oss: ^stack_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LSIGALTSTACK)
+		sigaltstack :: proc(ss: ^stack_t, oss: ^stack_t) -> result ---
+	}
 
 	/*
 	Adds sig to the signal mask of the calling process.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sighold.html ]]
 	*/
-	sighold :: proc(sig: Signal) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		sighold :: proc(sig: Signal) -> result ---
+	}
 
 	/*
 	Sets the disposition of sig to SIG_IGN.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sighold.html ]]
 	*/
-	sigignore :: proc(sig: Signal) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		sigignore :: proc(sig: Signal) -> result ---
+	}
 
 	/*
 	Removes sig from the signal mask of the calling process and suspend the calling process until
@@ -145,7 +156,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sighold.html ]]
 	*/
-	sigpause :: proc(sig: Signal) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		sigpause :: proc(sig: Signal) -> result ---
+	}
 
 	/*
 	Removes sig from the signal mask of the calling process.
@@ -154,7 +167,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sighold.html ]]
 	*/
-	sigrelse :: proc(sig: Signal) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		sigrelse :: proc(sig: Signal) -> result ---
+	}
 
 	/*
 	Changes the restart behavior when a function is interrupted by the specified signal.
@@ -163,7 +178,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/siginterrupt.html ]]
 	*/
-	siginterrupt :: proc(sig: Signal, flag: b32) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		siginterrupt :: proc(sig: Signal, flag: b32) -> result ---
+	}
 
 	/*
 	Test for a signal in a signal set.
@@ -205,7 +222,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/sigwait.html ]]
 	*/
-	sigwait :: proc(set: ^sigset_t, sig: ^Signal) -> Errno ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		sigwait :: proc(set: ^sigset_t, sig: ^Signal) -> Errno ---
+	}
 
 	/* NOTE: unimplemented on darwin.
 

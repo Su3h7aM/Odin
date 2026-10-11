@@ -3,39 +3,42 @@ package posix
 
 import "core:c"
 
-when ODIN_OS == .Darwin {
-	foreign import lib "system:System"
-} else {
-	foreign import lib "system:c"
-}
+// The Linux implementation is in the matching _linux.odin file.
+when ODIN_OS != .Linux {
+	when ODIN_OS == .Darwin {
+		foreign import lib "system:System"
+	} else {
+		foreign import lib "system:c"
+	}
 
-// sys/sem.h - XSI semaphore facility
+	// sys/sem.h - XSI semaphore facility
 
-foreign lib {
-	/*
-	Provides various semaphore control operation as specified by cmd.
+	foreign lib {
+		/*
+		Provides various semaphore control operation as specified by cmd.
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/semctl.html ]]
-	*/
-	@(link_name=LSEMCTL)
-	semctl :: proc(semid: FD, semnum: c.int, cmd: Sem_Cmd, #c_vararg args: ..semun) -> c.int ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/semctl.html ]]
+		*/
+		@(link_name=LSEMCTL)
+		semctl :: proc(semid: FD, semnum: c.int, cmd: Sem_Cmd, #c_vararg args: ..semun) -> c.int ---
 
-	/*
-	Returns the semaphore identifier associated with key.
+		/*
+		Returns the semaphore identifier associated with key.
 
-	Returns: -1 (setting errno) on failure, a semaphore file descriptor otherwise
+		Returns: -1 (setting errno) on failure, a semaphore file descriptor otherwise
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/semget.html ]]
-	*/
-	semget :: proc(key: key_t, nsems: c.int, semflg: IPC_Flags) -> FD ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/semget.html ]]
+		*/
+		semget :: proc(key: key_t, nsems: c.int, semflg: IPC_Flags) -> FD ---
 
-	/*
-	Perform atomically a user-defined array of semaphore operations in array order on the set of
-	semaphores associated with the semaphore identifier specified by the argument semid.
+		/*
+		Perform atomically a user-defined array of semaphore operations in array order on the set of
+		semaphores associated with the semaphore identifier specified by the argument semid.
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/semop.html ]]
-	*/
-	semop :: proc(semid: FD, sops: [^]sembuf, nsops: c.size_t) -> result ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/semop.html ]]
+		*/
+		semop :: proc(semid: FD, sops: [^]sembuf, nsops: c.size_t) -> result ---
+	}
 }
 
 Sem_Cmd :: enum c.int {
@@ -140,7 +143,9 @@ when ODIN_OS == .Darwin || ODIN_OS == .FreeBSD || ODIN_OS == .NetBSD || ODIN_OS 
 	SETVAL  :: 16
 	SETALL  :: 17
 
-	when ODIN_ARCH == .arm64 {
+	// The kernel's struct semid64_ds is asm-generic/sembuf.h on arm64 and
+	// riscv64, and asm/sembuf.h on x86-64, which pads each time with a word.
+	when ODIN_ARCH == .arm64 || ODIN_ARCH == .riscv64 {
 		semid_ds :: struct {
 			sem_perm:  ipc_perm,  // [PSX] operation permission structure
 			sem_otime: time_t,    // [PSX] last semop()

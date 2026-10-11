@@ -5,7 +5,7 @@ import "core:c"
 
 when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
-} else {
+} else when ODIN_OS != .Linux || size_of(rawptr) == 4 {
 	foreign import lib "system:c"
 }
 
@@ -19,8 +19,10 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fstatat.html ]]
 	*/
-	@(link_name="fstatat" + INODE_SUFFIX)
-	fstatat :: proc(fd: FD, path: cstring, buf: ^stat_t, flag: AT_Flags) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name="fstatat" + INODE_SUFFIX)
+		fstatat :: proc(fd: FD, path: cstring, buf: ^stat_t, flag: AT_Flags) -> result ---
+	}
 
 	/*
 	Obtain information about a "file" at the given path.
@@ -29,8 +31,10 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fstatat.html ]]
 	*/
-	@(link_name=LSTAT)
-	stat :: proc(path: cstring, buf: ^stat_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LSTAT)
+		stat :: proc(path: cstring, buf: ^stat_t) -> result ---
+	}
 
 	/*
 	Obtain information about an open file.
@@ -39,8 +43,10 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fstat.html ]]
 	*/
-	@(link_name=LFSTAT)
-	fstat :: proc(fildes: FD, buf: ^stat_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LFSTAT)
+		fstat :: proc(fildes: FD, buf: ^stat_t) -> result ---
+	}
 
 	/*
 	Obtain information about a "file" at the given path.
@@ -49,22 +55,28 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fstatat.html ]]
 	*/
-	@(link_name=LLSTAT)
-	lstat :: proc(path: cstring, buf: ^stat_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LLSTAT)
+		lstat :: proc(path: cstring, buf: ^stat_t) -> result ---
+	}
 
 	/*
 	Change the mode of a file.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/chmod.html ]]
 	*/
-	chmod :: proc(path: cstring, mode: mode_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		chmod :: proc(path: cstring, mode: mode_t) -> result ---
+	}
 
 	/*
 	Equivalent to chmod but takes an open file descriptor.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/fchmod.html ]]
 	*/
-	fchmod :: proc(fd: FD, mode: mode_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		fchmod :: proc(fd: FD, mode: mode_t) -> result ---
+	}
 
 	/*
 	Equivalent to chmod but follows (or doesn't) symlinks based on the flag and resolves
@@ -72,57 +84,73 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/chmod.html ]]
 	*/
-	fchmodat :: proc(fd: FD, path: cstring, mode: mode_t, flag: AT_Flags) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		fchmodat :: proc(fd: FD, path: cstring, mode: mode_t, flag: AT_Flags) -> result ---
+	}
 
 	/*
 	Make a directory.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mkdir.html ]]
 	*/
-	mkdir :: proc(path: cstring, mode: mode_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		mkdir :: proc(path: cstring, mode: mode_t) -> result ---
+	}
 
 	/*
 	Equivalent to mkdir but relative paths are relative to fd.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mkdir.html ]]
 	*/
-	mkdirat :: proc(fd: FD, path: cstring, mode: mode_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		mkdirat :: proc(fd: FD, path: cstring, mode: mode_t) -> result ---
+	}
 
 	/*
 	Make a FIFO special file.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mkfifo.html ]]
 	*/
-	mkfifo :: proc(path: cstring, mode: mode_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		mkfifo :: proc(path: cstring, mode: mode_t) -> result ---
+	}
 
 	/*
 	Equivalent to mkfifo but relative paths are relative to fd.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mkfifo.html ]]
 	*/
-	mkfifoat :: proc(fd: FD, path: cstring, mode: mode_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		mkfifoat :: proc(fd: FD, path: cstring, mode: mode_t) -> result ---
+	}
 
 	/*
 	Make directory, special file, or regular file.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mknodat.html ]]
 	*/
-	@(link_name=LMKNOD)
-	mknod :: proc(path: cstring, mode: mode_t, dev: dev_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		@(link_name=LMKNOD)
+		mknod :: proc(path: cstring, mode: mode_t, dev: dev_t) -> result ---
+	}
 
 	/*
 	Equivalent to mknod but relative paths are relative to fd.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mknodat.html ]]
 	*/
-	mknodat :: proc(fd: FD, path: cstring, mode: mode_t, dev: dev_t) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		mknodat :: proc(fd: FD, path: cstring, mode: mode_t, dev: dev_t) -> result ---
+	}
 
 	/*
 	Sets the file access and modification time of the given file descriptor.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/futimens.html ]]
 	*/
-	futimens :: proc(fd: FD, times: ^[2]timespec) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		futimens :: proc(fd: FD, times: ^[2]timespec) -> result ---
+	}
 
 	/*
 	Equivalent to futimens.
@@ -131,7 +159,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/futimens.html ]]
 	*/
-	utimensat :: proc(fd: FD, path: cstring, times: ^[2]timespec, flag: AT_Flags) -> result ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		utimensat :: proc(fd: FD, path: cstring, times: ^[2]timespec, flag: AT_Flags) -> result ---
+	}
 
 	/*
 	Set and get the file mode creation flags.
@@ -142,7 +172,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/umask.html ]]
 	*/
-	umask :: proc(cmask: mode_t) -> mode_t ---
+	when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+		umask :: proc(cmask: mode_t) -> mode_t ---
+	}
 }
 
 // Read, write, execute user.
@@ -482,4 +514,7 @@ when ODIN_OS == .Darwin {
 			__unused:         [2]c.uint,
 		}
 	}
+
+	UTIME_NOW  :: (1 << 30) - 1
+	UTIME_OMIT :: (1 << 30) - 2
 }

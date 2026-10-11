@@ -1,5 +1,31 @@
 package linux
 
+// clone(2) flags. The low byte of flags is the child's termination signal.
+CLONE_VM             :: 0x00000100
+CLONE_FS             :: 0x00000200
+CLONE_FILES          :: 0x00000400
+CLONE_SIGHAND        :: 0x00000800
+CLONE_PIDFD          :: 0x00001000
+CLONE_PTRACE         :: 0x00002000
+CLONE_VFORK          :: 0x00004000
+CLONE_PARENT         :: 0x00008000
+CLONE_THREAD         :: 0x00010000
+CLONE_NEWNS          :: 0x00020000
+CLONE_SYSVSEM        :: 0x00040000
+CLONE_SETTLS         :: 0x00080000
+CLONE_PARENT_SETTID  :: 0x00100000
+CLONE_CHILD_CLEARTID :: 0x00200000
+CLONE_DETACHED       :: 0x00400000
+CLONE_UNTRACED       :: 0x00800000
+CLONE_CHILD_SETTID   :: 0x01000000
+CLONE_NEWCGROUP      :: 0x02000000
+CLONE_NEWUTS         :: 0x04000000
+CLONE_NEWIPC         :: 0x08000000
+CLONE_NEWUSER        :: 0x10000000
+CLONE_NEWPID         :: 0x20000000
+CLONE_NEWNET         :: 0x40000000
+CLONE_IO             :: 0x80000000
+
 /*
 	Standard input file descriptor
 */
@@ -409,11 +435,38 @@ MFD_HUGE_1GB        :: transmute(Memfd_Create_Flags)(u32(30) << MAP_HUGE_SHIFT)
 MFD_HUGE_2GB        :: transmute(Memfd_Create_Flags)(u32(31) << MAP_HUGE_SHIFT)
 MFD_HUGE_16GB       :: transmute(Memfd_Create_Flags)(u32(34) << MAP_HUGE_SHIFT)
 
-/* Get window size */
+/*
+	Terminal ioctl requests, from `asm-generic/ioctls.h`, except
+	`SIOCATMARK` which is from `asm-generic/sockios.h`. Passed as the
+	request argument to `ioctl`; `TCGETS` on a non-terminal fails with
+	ENOTTY. The `TCGETS2` family encodes `size_of(Termios2)` with the
+	generic `_IOC` layout, and `TIOCGPTN`/`TIOCSPTLCK` encode a 4 byte
+	argument the same way.
+*/
+TCGETS    :: 0x5401
+TCSETS    :: 0x5402
+TCSETSW   :: 0x5403
+TCSETSF   :: 0x5404
+TCSBRK    :: 0x5409
+TCXONC    :: 0x540A
+TCFLSH    :: 0x540B
+TIOCSCTTY :: 0x540E
+TIOCGPGRP :: 0x540F
+TIOCSPGRP :: 0x5410
+TIOCOUTQ  :: 0x5411
 TIOCGWINSZ :: 0x5413
-
-/* Get terminal attributes; succeeds on terminals, fails with ENOTTY otherwise */
-TCGETS :: 0x5401
+TIOCSWINSZ :: 0x5414
+FIONREAD  :: 0x541B
+TIOCINQ   :: FIONREAD
+TIOCNOTTY :: 0x5422
+TIOCGSID  :: 0x5429
+TCGETS2   :: 0x802C542A
+TCSETS2   :: 0x402C542B
+TCSETSW2  :: 0x402C542C
+TCSETSF2  :: 0x402C542D
+TIOCGPTN  :: 0x80045430
+TIOCSPTLCK :: 0x40045431
+SIOCATMARK :: 0x8905
 
 /*
 	Operations for `prctl` that set and get the signal a process receives when
@@ -424,6 +477,11 @@ TCGETS :: 0x5401
 */
 PR_SET_PDEATHSIG :: 1
 PR_GET_PDEATHSIG :: 2
+
+// prctl(2) thread names include a terminating null and are limited to 16 bytes.
+// PR_SET_NAME is available since Linux 2.6.9, PR_GET_NAME since Linux 2.6.11.
+PR_SET_NAME :: 15
+PR_GET_NAME :: 16
 
 IORING_TIMEOUT_CLOCK_MASK  :: IO_Uring_Timeout_Flags{.BOOTTIME, .REALTIME}
 IORING_TIMEOUT_UPDATE_MASK :: IO_Uring_Timeout_Flags{.UPDATE, .LINK_TIMEOUT_UPDATE}

@@ -5,7 +5,7 @@ when ODIN_OS == .Windows {
 	foreign import lib "system:libucrt.lib"
 } else when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
-} else {
+} else when ODIN_OS != .Linux {
 	foreign import lib "system:c"
 }
 
@@ -21,8 +21,10 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/strerror.html ]]
 	*/
-	@(link_name="strerror")
-	_strerror :: proc(errnum: Errno) -> cstring ---
+	when ODIN_OS != .Linux {
+		@(link_name="strerror")
+		_strerror :: proc(errnum: Errno) -> cstring ---
+	}
 }
 
 strerror :: #force_inline proc "contextless" (errnum: Maybe(Errno) = nil) -> cstring {

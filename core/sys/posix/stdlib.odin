@@ -196,7 +196,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/grantpt.html ]]
 	*/
-	grantpt :: proc(fildes: FD) -> result ---
+	when ODIN_OS != .Linux {
+		grantpt :: proc(fildes: FD) -> result ---
+	}
 
 	/*
 	Allows a state array, pointed to by the state argument, to be initialized for future use.
@@ -245,7 +247,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mkdtemp.html ]]
 	*/
-	mkdtemp :: proc(template: [^]byte) -> cstring ---
+	when ODIN_OS != .Linux {
+		mkdtemp :: proc(template: [^]byte) -> cstring ---
+	}
 
 	/*
 	Creates a regular file with a unique name derived from template and return a file descriptor
@@ -257,7 +261,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/mkdtemp.html ]]
 	*/
-	mkstemp :: proc(template: cstring) -> FD ---
+	when ODIN_OS != .Linux {
+		mkstemp :: proc(template: cstring) -> FD ---
+	}
 
 	/*
 	Allocates size bytes aligned on a boundary specified by alignment, and shall return a pointer
@@ -274,7 +280,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/posix_openpt.html ]]
 	*/
-	posix_openpt :: proc(oflag: O_Flags) -> FD ---
+	when ODIN_OS != .Linux {
+		posix_openpt :: proc(oflag: O_Flags) -> FD ---
+	}
 
 	/*
 	Returns the name of the slave pseudo-terminal device associated with a master pseudo-terminal device.
@@ -283,14 +291,18 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/ptsname.html ]]
 	*/
-	ptsname :: proc(fildes: FD) -> cstring ---
+	when ODIN_OS != .Linux {
+		ptsname :: proc(fildes: FD) -> cstring ---
+	}
 
 	/*
 	Unlocks the slave pseudo-terminal device associated with the master to which fildes refers.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/unlockpt.html ]]
 	*/
-	unlockpt :: proc(fildes: FD) -> result ---
+	when ODIN_OS != .Linux {
+		unlockpt :: proc(fildes: FD) -> result ---
+	}
 
 	/*
 	Updates or add a variable in the environment of the calling process.
@@ -302,15 +314,19 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/setenv.html ]]
 	*/
-	setenv :: proc(envname: cstring, envval: cstring, overwrite: b32) -> result ---
+	when ODIN_OS != .Linux || !ODIN_NO_CRT {
+		setenv :: proc(envname: cstring, envval: cstring, overwrite: b32) -> result ---
+	}
 
 	/*
 	Removes an environment variable from the environment of the calling process.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/unsetenv.html ]]
 	*/
-	@(link_name=LUNSETENV)
-	unsetenv :: proc(name: cstring) -> result ---
+	when ODIN_OS != .Linux || !ODIN_NO_CRT {
+		@(link_name=LUNSETENV)
+		unsetenv :: proc(name: cstring) -> result ---
+	}
 
 	/*
 	Computes a sequence of pseudo-random integers in the range [0, {RAND_MAX}].
@@ -333,7 +349,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/realpath.html ]]
 	*/
-	realpath :: proc(file_name: cstring, resolved_name: [^]byte = nil) -> cstring ---
+	when ODIN_OS != .Linux {
+		realpath :: proc(file_name: cstring, resolved_name: [^]byte = nil) -> cstring ---
+	}
 
 	/*
 	Provides access to an implementation-defined encoding algorithm.

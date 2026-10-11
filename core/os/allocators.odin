@@ -52,6 +52,12 @@ TEMP_ALLOCATOR_GUARD :: #force_inline proc(collisions: []runtime.Allocator, loc 
 	assert(good_arena != nil)
 	if good_arena.backing_allocator.procedure == nil {
 		good_arena.backing_allocator = heap_allocator()
+		when ODIN_OS == .Linux && !ODIN_NO_CRT {
+			// First use (or first use after the exit cleanup destroyed
+			// these arenas): the fini cleaner must run again at the next
+			// cleanup, so clear its completion bit for this thread.
+			runtime._managed_thread_cleanup_reactivate(temp_allocator_fini)
+		}
 	}
 	tmp := runtime.arena_temp_begin(good_arena, loc)
 	return { good_arena, runtime.arena_allocator(good_arena), tmp, loc }
@@ -70,5 +76,11 @@ _temp_allocator_end :: proc(tmp: runtime.Arena_Temp) {
 
 @(init, private)
 init_thread_local_cleaner :: proc "contextless" () {
-	runtime.add_thread_local_cleaner(temp_allocator_fini)
+	// Same idempotent helper the first-use path uses: exactly one slot no
+	// matter which runs first.
+	when ODIN_OS == .Linux && (!ODIN_NO_CRT || ODIN_ARCH == .amd64) {
+		runtime._managed_thread_cleanup_reactivate(temp_allocator_fini)
+	} else {
+		runtime.add_thread_local_cleaner(temp_allocator_fini)
+	}
 }

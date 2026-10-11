@@ -369,10 +369,24 @@ gb_internal bool try_cached_build(Checker *c, Array<String> const &args) {
 
 		isize args_count = 0;
 
+		// The final provider profile is part of the key: a hit must agree
+		// on owned vs managed, never just argv. Manifests predating the
+		// profile line never hit. Callers guarantee build_context.no_crt
+		// is final here (explicit builds; post-selection codegen path);
+		// the pre-check fast path skips automatic builds outright.
+		bool profile_verified = false;
 		for (; it.pos < data.len; args_count++) {
 			String line = string_split_iterator(&it, '\n');
 			line = string_trim_whitespace(line);
 			if (line.len == 0) {
+				break;
+			}
+			if (string_starts_with(line, str_lit("profile "))) {
+				String want = build_context.no_crt ? str_lit("profile owned") : str_lit("profile managed");
+				if (line != want) {
+					return false;
+				}
+				profile_verified = true;
 				break;
 			}
 			if (args_count >= args.count) {
@@ -382,6 +396,9 @@ gb_internal bool try_cached_build(Checker *c, Array<String> const &args) {
 			if (line != args[args_count]) {
 				return false;
 			}
+		}
+		if (!profile_verified) {
+			return false;
 		}
 	}
 	{
@@ -455,6 +472,10 @@ void write_cached_build(Checker *c, Array<String> const &args) {
 			String targ = string_trim_whitespace(arg);
 			gb_fprintf(&f, "%.*s\n", LIT(targ));
 		}
+		// The final provider profile is part of the key: a cached managed
+		// artifact must never satisfy an owned build or vice versa. The
+		// store always runs post-codegen, so no_crt is final here.
+		gb_fprintf(&f, "profile %s\n", build_context.no_crt ? "owned" : "managed");
 	}
 	{
 		char const *path_c = alloc_cstring(temporary_allocator(), build_context.build_cache_data.env_path);

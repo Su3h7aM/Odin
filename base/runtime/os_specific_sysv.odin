@@ -21,6 +21,10 @@ Auxiliary_Vector_Type :: enum i32 {
 	AT_EUID   = 12, // a_val
 	AT_GID    = 13, // a_val
 	AT_EGID   = 14, // a_val
+	// Linux only: base address of the kernel vDSO ELF image (a_ptr).
+	// The kernel maps the vDSO into every process and publishes it here;
+	// see vdso(7). Absent entries read as zero through the capture below.
+	AT_SYSINFO_EHDR = 33,
 }
 
 @(private="file")
@@ -48,6 +52,12 @@ init_auxv :: proc "contextless" () {
 		auxv = auxv[1:]
 	}
 	auxv__ = cast([^]auxv_t)(auxv[1:])
+	// Capture the Linux-specific tag once; other OSes keep vdso_addr zero.
+	when ODIN_OS == .Linux {
+		if v, found := _get_auxiliary(.AT_SYSINFO_EHDR); found {
+			vdso_addr = uintptr(v.a_ptr)
+		}
+	}
 }
 
 // Get a value from the auxiliary vector.

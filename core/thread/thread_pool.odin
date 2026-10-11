@@ -216,6 +216,15 @@ pool_add_task :: proc(pool: ^Pool, allocator: mem.Allocator, procedure: Task_Pro
 //
 // The thread will be restarted to accept new tasks.
 //
+// On Linux without CRT, `terminate` is unavailable, so this does not stop the
+// task. It waits for the task's thread to end itself, for example from a
+// signal handler that exits only the faulting thread with the raw exit
+// syscall, and then does the same accounting and replacement. It blocks for as
+// long as the task keeps running, so only call it for a task that is known to
+// be ending its own thread. Like `terminate`, an exit that skips the thread's
+// cleanup abandons the locks it held and the memory it allocated. `exit_code`
+// is ignored.
+//
 // Returns true if the task was found and terminated.
 pool_stop_task :: proc(pool: ^Pool, user_index: int, exit_code: int = 1) -> bool {
 	sync.guard(&pool.mutex)
@@ -223,7 +232,11 @@ pool_stop_task :: proc(pool: ^Pool, user_index: int, exit_code: int = 1) -> bool
 	for t, i in pool.threads {
 		data := cast(^Pool_Thread_Data)t.data
 		if data.task.user_index == user_index && data.task.procedure != nil {
-			terminate(t, exit_code)
+			when ODIN_OS == .Linux && ODIN_NO_CRT {
+				join(t)
+			} else {
+				terminate(t, exit_code)
+			}
 
 			append(&pool.tasks_done, data.task)
 			intrinsics.atomic_add(&pool.num_done, 1)
@@ -250,7 +263,8 @@ pool_stop_task :: proc(pool: ^Pool, user_index: int, exit_code: int = 1) -> bool
 
 // Forcibly stop all running tasks.
 //
-// The same notes from `pool_stop_task` apply here.
+// The same notes from `pool_stop_task` apply here, except that on Linux
+// without CRT this panics, because it calls `terminate` on every task.
 pool_stop_all_tasks :: proc(pool: ^Pool, exit_code: int = 1) {
 	sync.guard(&pool.mutex)
 
@@ -283,6 +297,8 @@ pool_stop_all_tasks :: proc(pool: ^Pool, exit_code: int = 1) {
 // it will no longer run any more tasks.
 //
 // The pool must still be destroyed after this.
+//
+// On Linux without CRT this panics, because it calls `terminate`.
 pool_shutdown :: proc(pool: ^Pool, exit_code: int = 1) {
 	intrinsics.atomic_store(&pool.is_running, false)
 	sync.guard(&pool.mutex)

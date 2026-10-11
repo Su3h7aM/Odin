@@ -3,48 +3,51 @@ package posix
 
 import "core:c"
 
-when ODIN_OS == .Darwin {
-	foreign import lib "system:System"
-} else {
-	foreign import lib "system:c"
-}
+// The Linux implementation is in the matching _linux.odin file.
+when ODIN_OS != .Linux {
+	when ODIN_OS == .Darwin {
+		foreign import lib "system:System"
+	} else {
+		foreign import lib "system:c"
+	}
 
-// sys/shm.h = XSI shared memory facility
+	// sys/shm.h = XSI shared memory facility
 
-foreign lib {
-	/*
-	Attaches the shared memory segment associated with the identifier
-	into the address space of the calling process.
+	foreign lib {
+		/*
+		Attaches the shared memory segment associated with the identifier
+		into the address space of the calling process.
 
-	Returns: nil (setting errno) on failure, the address otherwise
+		Returns: `(rawptr)(~uintptr(0))`, as C's `(void *)-1` (setting errno), on failure, the address otherwise
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/shmat.html ]]
-	*/
-	shmat :: proc(shmid: FD, shmaddr: rawptr, shmflag: SHM_Flags) -> rawptr ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/shmat.html ]]
+		*/
+		shmat :: proc(shmid: FD, shmaddr: rawptr, shmflag: SHM_Flags) -> rawptr ---
 
-	/*
-	Provides various shared memory operation as specified by the given cmd.
+		/*
+		Provides various shared memory operation as specified by the given cmd.
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/shmctl.html ]]
-	*/
-	@(link_name=LSHMCTL)
-	shmctl :: proc(shmid: FD, cmd: IPC_Cmd, buf: ^shmid_ds) -> result ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/shmctl.html ]]
+		*/
+		@(link_name=LSHMCTL)
+		shmctl :: proc(shmid: FD, cmd: IPC_Cmd, buf: ^shmid_ds) -> result ---
 
-	/*
-	Detaches the shared memory segment located at the address specified.
+		/*
+		Detaches the shared memory segment located at the address specified.
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/shmdt.html ]] 
-	*/
-	shmdt :: proc(shmaddr: rawptr) -> result ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/shmdt.html ]] 
+		*/
+		shmdt :: proc(shmaddr: rawptr) -> result ---
 
-	/*
-	Returns the shared memory identifier associated with key.
+		/*
+		Returns the shared memory identifier associated with key.
 
-	Returns: -1 (setting errno) on failure, the shared memory ID otherwise
+		Returns: -1 (setting errno) on failure, the shared memory ID otherwise
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/shmget.html ]]
-	*/
-	shmget :: proc(key: key_t, size: c.size_t, shmflag: SHM_Flags) -> FD ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/shmget.html ]]
+		*/
+		shmget :: proc(key: key_t, size: c.size_t, shmflag: SHM_Flags) -> FD ---
+	}
 }
 
 SHM_Flag_Bits :: enum c.int {

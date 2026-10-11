@@ -1,6 +1,8 @@
 #+build linux, darwin, netbsd, openbsd, freebsd
 package posix
 
+_ :: lib
+
 when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
 } else {
@@ -57,8 +59,9 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/basename.html ]]
 	*/
-	@(link_name=LBASENAME)
-	basename :: proc(path: cstring) -> cstring ---
+	when ODIN_OS != .Linux {
+		basename :: proc(path: cstring) -> cstring ---
+	}
 
 	/*
 	Takes a string that contains a pathname, and returns a string that is a pathname of the parent
@@ -72,11 +75,7 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/dirname.html ]]
 	*/
-	dirname :: proc(path: cstring) -> cstring ---
-}
-
-when ODIN_OS == .Linux {
-	@(private) LBASENAME :: "__xpg_basename"
-} else {
-	@(private) LBASENAME :: "basename"
+	when ODIN_OS != .Linux {
+		dirname :: proc(path: cstring) -> cstring ---
+	}
 }

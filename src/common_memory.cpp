@@ -461,6 +461,89 @@ struct ArenaTempGuard {
 	ArenaTemp temp;
 };
 
+// Passive trial-generation checkpoint for the owned-first automatic profile.
+// Unlike ArenaTemp, capturing a mark touches no counters and installs no
+// scope: discarding it is inert, so Owned-success and explicit-profile
+// compilations keep exactly their current behavior. Only the managed
+// fallback rollback consumes marks, through arena_rewind_quiescent below.
+struct ArenaCheckpoint {
+	MemoryBlock *block;
+	isize        used;
+};
+
+gb_internal ArenaCheckpoint arena_checkpoint(Arena *arena) {
+	ArenaCheckpoint mark = {};
+	if (arena != nullptr && arena->curr_block != nullptr) {
+		mark.block = arena->curr_block;
+		mark.used  = arena->curr_block->used;
+	}
+	return mark;
+}
+
+gb_internal bool arena_checkpoint_valid(Arena *arena, ArenaCheckpoint mark) {
+	if (arena == nullptr) {
+		// No arena appeared here; only an empty mark is consistent.
+		return mark.block == nullptr;
+	}
+	if (arena->temp_count != 0) {
+		return false;
+	}
+	if (mark.block == nullptr) {
+		return true;
+	}
+	for (MemoryBlock *block = arena->curr_block; block != nullptr; block = block->prev) {
+		if (block == mark.block) {
+			return mark.used >= 0 && mark.used <= mark.block->size && mark.used <= block->used;
+		}
+	}
+	return false;
+}
+
+// Rewinds an arena to a checkpoint captured earlier on the same arena.
+// QUIESCENCE CONTRACT: no task runs or will run on any thread for the
+// duration, no temporary or permanent scope is active on this arena, and
+// the checkpoint was validated with arena_checkpoint_valid. This is the
+// only helper permitted to rewind an arena owned by another thread, and
+// only under that contract; every other arena API keeps its owner-thread
+// assertions unchanged. Blocks newer than the mark are decommitted; a
+// mark block that still holds pre-checkpoint bytes is only truncated,
+// never decommitted. The Arena struct itself (heap-owned) is preserved.
+// arena->minimum_block_size lives in that heap struct, so it is kept as
+// is: arena_alloc only normalizes it against DEFAULT_MINIMUM_BLOCK_SIZE
+// and sizes each block from the request, so the rewind changes no sizing
+// behavior.
+gb_internal void arena_rewind_quiescent(Arena *arena, ArenaCheckpoint mark) {
+	GB_ASSERT(arena != nullptr);
+	GB_ASSERT_MSG(arena->temp_count == 0, "arena rewind with an active scope");
+	if (mark.block == nullptr) {
+		// The arena had no block at capture time: every block is
+		// post-checkpoint, so drop them all and keep the struct.
+		arena_free_all(arena);
+		return;
+	}
+	{
+		bool found = false;
+		for (MemoryBlock *block = arena->curr_block; block != nullptr; block = block->prev) {
+			if (block == mark.block) {
+				found = true;
+				break;
+			}
+		}
+		GB_ASSERT_MSG(found, "trial arena checkpoint block not owned by arena");
+	}
+	while (arena->curr_block != mark.block) {
+		MemoryBlock *free_block = arena->curr_block;
+		arena->curr_block = free_block->prev;
+		virtual_memory_dealloc(free_block);
+	}
+	MemoryBlock *block = arena->curr_block;
+	GB_ASSERT_MSG(block->used >= mark.used, "trial arena checkpoint used out of order");
+	// `arena_alloc` hands out zeroed memory, so the reclaimed tail is
+	// cleared exactly as arena_temp_end does.
+	gb_zero_size(block->base + mark.used, block->used - mark.used);
+	block->used = mark.used;
+}
+
 
 gb_internal GB_ALLOCATOR_PROC(arena_allocator_proc);
 

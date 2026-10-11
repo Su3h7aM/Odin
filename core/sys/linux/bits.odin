@@ -638,6 +638,58 @@ MSync_Flags_Bits :: enum {
 }
 
 /*
+	Bits for Fallocate_Mode. The mode with no bits set allocates the range and
+	grows the file if the range goes past its end.
+*/
+Fallocate_Mode_Bits :: enum {
+	KEEP_SIZE      = 0,
+	PUNCH_HOLE     = 1,
+	NO_HIDE_STALE  = 2,
+	COLLAPSE_RANGE = 3,
+	ZERO_RANGE     = 4,
+	INSERT_RANGE   = 5,
+	UNSHARE_RANGE  = 6,
+	WRITE_ZEROES   = 7,
+}
+
+/*
+	Argument for fadvise64(2). These are the values of the 64 bit architectures
+	this package supports, `POSIX_FADV_*` in `fcntl.h`.
+*/
+FAdvice :: enum i32 {
+	NORMAL     = 0,
+	RANDOM     = 1,
+	SEQUENTIAL = 2,
+	WILLNEED   = 3,
+	DONTNEED   = 4,
+	NOREUSE    = 5,
+}
+
+/*
+	Bits for RW_Flags, `RWF_*` in `linux/fs.h`.
+*/
+RW_Flags_Bits :: enum {
+	HIPRI     = 0,
+	DSYNC     = 1,
+	SYNC      = 2,
+	NOWAIT    = 3,
+	APPEND    = 4,
+	NOAPPEND  = 5,
+	ATOMIC    = 6,
+	DONTCACHE = 7,
+	NOSIGNAL  = 8,
+}
+
+/*
+	Bits for Sync_File_Range_Flags, `SYNC_FILE_RANGE_*` in `linux/fs.h`.
+*/
+Sync_File_Range_Flags_Bits :: enum {
+	WAIT_BEFORE = 0,
+	WRITE       = 1,
+	WAIT_AFTER  = 2,
+}
+
+/*
 	Argument for madvice(2)
 */
 MAdvice :: enum {
@@ -942,6 +994,16 @@ Pid_FD_Flags_Bits :: enum {
 }
 
 /*
+	Bits for Rseq_Flags, `RSEQ_FLAG_*` in `linux/rseq.h`.
+*/
+Rseq_Flags_Bits :: enum {
+	UNREGISTER = 0,
+	// Enables the scheduler time slice extension for the thread at
+	// registration when the kernel supports it. Available since Linux 7.0.
+	SLICE_EXT_DEFAULT_ON = 1,
+}
+
+/*
 	Priority for process, process group, user
 */
 Priority_Which :: enum i32 {
@@ -1001,8 +1063,8 @@ Sig_Mask_Kind :: enum i32 {
 }
 
 Sig_Stack_Flag :: enum i32 {
-	DISABLE = 0,
-	ONSTACK = 1,
+	ONSTACK = 0,
+	DISABLE = 1,
 	AUTODISARM = 31,
 }
 
@@ -1647,7 +1709,7 @@ IPC_Flags_Bits :: enum {
 	SHM_NORESERVE = 12,
 	// Usage flags for shared memory.
 	IPC_NOWAIT    = 11,
-	SEM_UNDO      = 9,
+	SEM_UNDO      = 12,
 	SHM_RDONLY    = 12,
 	SHM_RND       = 13,
 	SHM_REMAP     = 14,
@@ -2277,6 +2339,16 @@ Eventfd_Flags_Bits :: enum {
 	NONBLOCK = auto_cast Open_Flags_Bits.NONBLOCK,
 }
 
+/*
+	Bits for Signal_Fd_Flags, `SFD_*` in `linux/signalfd.h`.
+	These match `O_NONBLOCK` (04000) and `O_CLOEXEC` (02000000) on all
+	supported architectures.
+*/
+Signal_Fd_Flags_Bits :: enum {
+	NONBLOCK = 11,
+	CLOEXEC  = 19,
+}
+
 Sched_Policy :: enum u32 {
 	OTHER    = 0,
 	BATCH    = 3,
@@ -2306,4 +2378,256 @@ Memfd_Create_Flag_Bits :: enum {
 	ALLOW_SEALING = log2(0x2),
 	HUGETLB       = log2(0x4),
 }
+
+/*
+	Bits for Resolve_Flags, `RESOLVE_*` in `linux/openat2.h`.
+*/
+Resolve_Flags_Bits :: enum {
+	NO_XDEV      = log2(0x01),
+	NO_MAGICLINKS = log2(0x02),
+	NO_SYMLINKS  = log2(0x04),
+	BENEATH      = log2(0x08),
+	IN_ROOT      = log2(0x10),
+	CACHED       = log2(0x20),
+}
+#assert(1 << uint(Resolve_Flags_Bits.NO_XDEV) == 0x01)
+#assert(1 << uint(Resolve_Flags_Bits.NO_MAGICLINKS) == 0x02)
+#assert(1 << uint(Resolve_Flags_Bits.NO_SYMLINKS) == 0x04)
+#assert(1 << uint(Resolve_Flags_Bits.BENEATH) == 0x08)
+#assert(1 << uint(Resolve_Flags_Bits.IN_ROOT) == 0x10)
+#assert(1 << uint(Resolve_Flags_Bits.CACHED) == 0x20)
+
+/*
+	Number of control characters in `Termios.cc`, `NCCS` in
+	`asm-generic/termbits.h`.
+*/
+NCCS :: 19
+
+/*
+	Indexes into `Termios.cc`, `VINTR` through `VEOL2` in
+	`asm-generic/termbits.h`.
+*/
+VINTR    :: 0
+VQUIT    :: 1
+VERASE   :: 2
+VKILL    :: 3
+VEOF     :: 4
+VTIME    :: 5
+VMIN     :: 6
+VSWTC    :: 7
+VSTART   :: 8
+VSTOP    :: 9
+VSUSP    :: 10
+VEOL     :: 11
+VREPRINT :: 12
+VDISCARD :: 13
+VWERASE  :: 14
+VLNEXT   :: 15
+VEOL2    :: 16
+
+/*
+	Bits for Termios_Input_Flags, `c_iflag` in `asm-generic/termbits.h`
+	and `asm-generic/termbits-common.h`.
+*/
+Termios_Input_Flags_Bits :: enum {
+	IGNBRK  = log2(0o0000001),
+	BRKINT  = log2(0o0000002),
+	IGNPAR  = log2(0o0000004),
+	PARMRK  = log2(0o0000010),
+	INPCK   = log2(0o0000020),
+	ISTRIP  = log2(0o0000040),
+	INLCR   = log2(0o0000100),
+	IGNCR   = log2(0o0000200),
+	ICRNL   = log2(0o0000400),
+	IUCLC   = log2(0o0001000),
+	IXON    = log2(0o0002000),
+	IXANY   = log2(0o0004000),
+	IXOFF   = log2(0o0010000),
+	IMAXBEL = log2(0o0020000),
+	IUTF8   = log2(0o0040000),
+}
+#assert(1 << uint(Termios_Input_Flags_Bits.IGNBRK) == 0o0000001)
+#assert(1 << uint(Termios_Input_Flags_Bits.BRKINT) == 0o0000002)
+#assert(1 << uint(Termios_Input_Flags_Bits.IGNPAR) == 0o0000004)
+#assert(1 << uint(Termios_Input_Flags_Bits.PARMRK) == 0o0000010)
+#assert(1 << uint(Termios_Input_Flags_Bits.INPCK) == 0o0000020)
+#assert(1 << uint(Termios_Input_Flags_Bits.ISTRIP) == 0o0000040)
+#assert(1 << uint(Termios_Input_Flags_Bits.INLCR) == 0o0000100)
+#assert(1 << uint(Termios_Input_Flags_Bits.IGNCR) == 0o0000200)
+#assert(1 << uint(Termios_Input_Flags_Bits.ICRNL) == 0o0000400)
+#assert(1 << uint(Termios_Input_Flags_Bits.IUCLC) == 0o0001000)
+#assert(1 << uint(Termios_Input_Flags_Bits.IXON) == 0o0002000)
+#assert(1 << uint(Termios_Input_Flags_Bits.IXANY) == 0o0004000)
+#assert(1 << uint(Termios_Input_Flags_Bits.IXOFF) == 0o0010000)
+#assert(1 << uint(Termios_Input_Flags_Bits.IMAXBEL) == 0o0020000)
+#assert(1 << uint(Termios_Input_Flags_Bits.IUTF8) == 0o0040000)
+
+/*
+	Input mode flags, `c_iflag` of `struct termios`.
+*/
+Termios_Input_Flags :: bit_set[Termios_Input_Flags_Bits; u32]
+
+/*
+	Bits for Termios_Output_Flags, `c_oflag` in `asm-generic/termbits.h`
+	and `asm-generic/termbits-common.h`. Only the single-bit flags are
+	listed here; the NL/CR/TAB/BS/VT/FF delay masks are multi-bit fields.
+*/
+Termios_Output_Flags_Bits :: enum {
+	OPOST  = log2(0o0000001),
+	OLCUC  = log2(0o0000002),
+	ONLCR  = log2(0o0000004),
+	OCRNL  = log2(0o0000010),
+	ONOCR  = log2(0o0000020),
+	ONLRET = log2(0o0000040),
+	OFILL  = log2(0o0000100),
+	OFDEL  = log2(0o0000200),
+}
+#assert(1 << uint(Termios_Output_Flags_Bits.OPOST) == 0o0000001)
+#assert(1 << uint(Termios_Output_Flags_Bits.OLCUC) == 0o0000002)
+#assert(1 << uint(Termios_Output_Flags_Bits.ONLCR) == 0o0000004)
+#assert(1 << uint(Termios_Output_Flags_Bits.OCRNL) == 0o0000010)
+#assert(1 << uint(Termios_Output_Flags_Bits.ONOCR) == 0o0000020)
+#assert(1 << uint(Termios_Output_Flags_Bits.ONLRET) == 0o0000040)
+#assert(1 << uint(Termios_Output_Flags_Bits.OFILL) == 0o0000100)
+#assert(1 << uint(Termios_Output_Flags_Bits.OFDEL) == 0o0000200)
+
+/*
+	Output mode flags, `c_oflag` of `struct termios`.
+*/
+Termios_Output_Flags :: bit_set[Termios_Output_Flags_Bits; u32]
+
+/*
+	Bits for Termios_Control_Flags, `c_cflag` in `asm-generic/termbits.h` and
+	`asm-generic/termbits-common.h`.
+	Only the single-bit flags are listed here; `CBAUD` and `CSIZE` are
+	multi-bit masks kept as plain constants next to `Baud_Rate`.
+*/
+Termios_Control_Flags_Bits :: enum {
+	CSTOPB = log2(0o0000100),
+	CREAD  = log2(0o0000200),
+	PARENB = log2(0o0000400),
+	PARODD = log2(0o0001000),
+	HUPCL  = log2(0o0002000),
+	CLOCAL = log2(0o0004000),
+	ADDRB   = log2(0o4000000000),
+	CMSPAR  = log2(0o10000000000),
+	CRTSCTS = log2(0o20000000000),
+}
+#assert(1 << uint(Termios_Control_Flags_Bits.CSTOPB) == 0o0000100)
+#assert(1 << uint(Termios_Control_Flags_Bits.CREAD) == 0o0000200)
+#assert(1 << uint(Termios_Control_Flags_Bits.PARENB) == 0o0000400)
+#assert(1 << uint(Termios_Control_Flags_Bits.PARODD) == 0o0001000)
+#assert(1 << uint(Termios_Control_Flags_Bits.HUPCL) == 0o0002000)
+#assert(1 << uint(Termios_Control_Flags_Bits.CLOCAL) == 0o0004000)
+#assert(1 << uint(Termios_Control_Flags_Bits.ADDRB) == 0o4000000000)
+#assert(1 << uint(Termios_Control_Flags_Bits.CMSPAR) == 0o10000000000)
+#assert(1 << uint(Termios_Control_Flags_Bits.CRTSCTS) == 0o20000000000)
+
+/*
+	Control mode flags, `c_cflag` of `struct termios`.
+*/
+Termios_Control_Flags :: bit_set[Termios_Control_Flags_Bits; u32]
+
+/*
+	Multi-bit masks of `c_cflag` in `asm-generic/termbits.h`. `CBAUD`
+	selects one of the `Baud_Rate` values below, `CSIZE` selects one of
+	the `CS5` through `CS8` character sizes below, and `CIBAUD` selects
+	the input baud rate, holding the same `Baud_Rate` value shifted
+	left 16 bits; none is a single bit, so none fits its bit_set.
+*/
+CBAUD :: u32(0x100f)
+CIBAUD :: u32(0x100f0000)
+CSIZE :: u32(0x0030)
+
+/*
+	Character sizes for the `CSIZE` field of `c_cflag`,
+	`CS5` through `CS8` in `asm-generic/termbits.h`.
+*/
+CS5 :: u32(0x0000)
+CS6 :: u32(0x0010)
+CS7 :: u32(0x0020)
+CS8 :: u32(0x0030)
+
+/*
+	Baud rates for the `CBAUD` field of `c_cflag`,
+	`B0` through `B4000000` in `asm-generic/termbits.h` and
+	`asm-generic/termbits-common.h`.
+*/
+Baud_Rate :: enum u32 {
+	B0       = 0x0000,
+	B50      = 0x0001,
+	B75      = 0x0002,
+	B110     = 0x0003,
+	B134     = 0x0004,
+	B150     = 0x0005,
+	B200     = 0x0006,
+	B300     = 0x0007,
+	B600     = 0x0008,
+	B1200    = 0x0009,
+	B1800    = 0x000a,
+	B2400    = 0x000b,
+	B4800    = 0x000c,
+	B9600    = 0x000d,
+	B19200   = 0x000e,
+	B38400   = 0x000f,
+	BOTHER   = 0x1000,
+	B57600   = 0x1001,
+	B115200  = 0x1002,
+	B230400  = 0x1003,
+	B460800  = 0x1004,
+	B500000  = 0x1005,
+	B576000  = 0x1006,
+	B921600  = 0x1007,
+	B1000000 = 0x1008,
+	B1152000 = 0x1009,
+	B1500000 = 0x100a,
+	B2000000 = 0x100b,
+	B2500000 = 0x100c,
+	B3000000 = 0x100d,
+	B3500000 = 0x100e,
+	B4000000 = 0x100f,
+}
+
+/*
+	Bits for Termios_Local_Flags, `c_lflag` in `asm-generic/termbits.h`.
+*/
+Termios_Local_Flags_Bits :: enum {
+	ISIG    = log2(0o0000001),
+	ICANON  = log2(0o0000002),
+	XCASE   = log2(0o0000004),
+	ECHO    = log2(0o0000010),
+	ECHOE   = log2(0o0000020),
+	ECHOK   = log2(0o0000040),
+	ECHONL  = log2(0o0000100),
+	NOFLSH  = log2(0o0000200),
+	TOSTOP  = log2(0o0000400),
+	ECHOCTL = log2(0o0001000),
+	ECHOPRT = log2(0o0002000),
+	ECHOKE  = log2(0o0004000),
+	FLUSHO  = log2(0o0010000),
+	PENDIN  = log2(0o0100000),
+	IEXTEN  = log2(0o0200000),
+	EXTPROC = log2(0o0400000),
+}
+#assert(1 << uint(Termios_Local_Flags_Bits.ISIG) == 0o0000001)
+#assert(1 << uint(Termios_Local_Flags_Bits.ICANON) == 0o0000002)
+#assert(1 << uint(Termios_Local_Flags_Bits.XCASE) == 0o0000004)
+#assert(1 << uint(Termios_Local_Flags_Bits.ECHO) == 0o0000010)
+#assert(1 << uint(Termios_Local_Flags_Bits.ECHOE) == 0o0000020)
+#assert(1 << uint(Termios_Local_Flags_Bits.ECHOK) == 0o0000040)
+#assert(1 << uint(Termios_Local_Flags_Bits.ECHONL) == 0o0000100)
+#assert(1 << uint(Termios_Local_Flags_Bits.NOFLSH) == 0o0000200)
+#assert(1 << uint(Termios_Local_Flags_Bits.TOSTOP) == 0o0000400)
+#assert(1 << uint(Termios_Local_Flags_Bits.ECHOCTL) == 0o0001000)
+#assert(1 << uint(Termios_Local_Flags_Bits.ECHOPRT) == 0o0002000)
+#assert(1 << uint(Termios_Local_Flags_Bits.ECHOKE) == 0o0004000)
+#assert(1 << uint(Termios_Local_Flags_Bits.FLUSHO) == 0o0010000)
+#assert(1 << uint(Termios_Local_Flags_Bits.PENDIN) == 0o0100000)
+#assert(1 << uint(Termios_Local_Flags_Bits.IEXTEN) == 0o0200000)
+#assert(1 << uint(Termios_Local_Flags_Bits.EXTPROC) == 0o0400000)
+
+/*
+	Local mode flags, `c_lflag` of `struct termios`.
+*/
+Termios_Local_Flags :: bit_set[Termios_Local_Flags_Bits; u32]
 

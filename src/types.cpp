@@ -4147,8 +4147,11 @@ gb_internal Selection lookup_field_with_selection(Type *type_, InternedString fi
 		#if 1
 			String data_str = str_lit("data");
 			String id_str = str_lit("id");
-			gb_local_persist Entity *entity__any_data = alloc_entity_field(nullptr, make_token_ident(data_str), t_rawptr, false, 0);
-			gb_local_persist Entity *entity__any_id = alloc_entity_field(nullptr, make_token_ident(id_str), t_typeid, false, 1);
+			// Fresh per lookup: a function-static entity would outlive a
+			// superseded provisional check and carry its state into the
+			// fallback recheck.
+			Entity *entity__any_data = alloc_entity_field(nullptr, make_token_ident(data_str), t_rawptr, false, 0);
+			Entity *entity__any_id = alloc_entity_field(nullptr, make_token_ident(id_str), t_typeid, false, 1);
 
 			String n = field_name.string();
 			if (n == data_str) {
@@ -4169,13 +4172,15 @@ gb_internal Selection lookup_field_with_selection(Type *type_, InternedString fi
 			gb_local_persist String x = str_lit("x");
 			gb_local_persist String y = str_lit("y");
 			gb_local_persist String z = str_lit("z");
-			gb_local_persist Entity *entity__w = alloc_entity_field(nullptr, make_token_ident(w), t_f16, false, 3);
-			gb_local_persist Entity *entity__x = alloc_entity_field(nullptr, make_token_ident(x), t_f16, false, 0);
-			gb_local_persist Entity *entity__y = alloc_entity_field(nullptr, make_token_ident(y), t_f16, false, 1);
-			gb_local_persist Entity *entity__z = alloc_entity_field(nullptr, make_token_ident(z), t_f16, false, 2);
+			// Fresh per lookup (see the any selectors above): these must
+			// not outlive a superseded provisional check.
+			Entity *entity__w = alloc_entity_field(nullptr, make_token_ident(w), t_f16, false, 3);
+			Entity *entity__x = alloc_entity_field(nullptr, make_token_ident(x), t_f16, false, 0);
+			Entity *entity__y = alloc_entity_field(nullptr, make_token_ident(y), t_f16, false, 1);
+			Entity *entity__z = alloc_entity_field(nullptr, make_token_ident(z), t_f16, false, 2);
 
 			gb_local_persist String xyz = str_lit("xyz");
-			gb_local_persist Entity *entity__xyz = alloc_entity_field(nullptr, make_token_ident(xyz), alloc_type_array(t_f16, 3), false, -1);
+			Entity *entity__xyz = alloc_entity_field(nullptr, make_token_ident(xyz), alloc_type_array(t_f16, 3), false, -1);
 
 			String n = field_name.string();
 			if (n == w) {
@@ -4207,13 +4212,14 @@ gb_internal Selection lookup_field_with_selection(Type *type_, InternedString fi
 			gb_local_persist String x = str_lit("x");
 			gb_local_persist String y = str_lit("y");
 			gb_local_persist String z = str_lit("z");
-			gb_local_persist Entity *entity__w = alloc_entity_field(nullptr, make_token_ident(w), t_f32, false, 3);
-			gb_local_persist Entity *entity__x = alloc_entity_field(nullptr, make_token_ident(x), t_f32, false, 0);
-			gb_local_persist Entity *entity__y = alloc_entity_field(nullptr, make_token_ident(y), t_f32, false, 1);
-			gb_local_persist Entity *entity__z = alloc_entity_field(nullptr, make_token_ident(z), t_f32, false, 2);
+			// Fresh per lookup (see the any selectors above).
+			Entity *entity__w = alloc_entity_field(nullptr, make_token_ident(w), t_f32, false, 3);
+			Entity *entity__x = alloc_entity_field(nullptr, make_token_ident(x), t_f32, false, 0);
+			Entity *entity__y = alloc_entity_field(nullptr, make_token_ident(y), t_f32, false, 1);
+			Entity *entity__z = alloc_entity_field(nullptr, make_token_ident(z), t_f32, false, 2);
 
 			gb_local_persist String xyz = str_lit("xyz");
-			gb_local_persist Entity *entity__xyz = alloc_entity_field(nullptr, make_token_ident(xyz), alloc_type_array(t_f32, 3), false, -1);
+			Entity *entity__xyz = alloc_entity_field(nullptr, make_token_ident(xyz), alloc_type_array(t_f32, 3), false, -1);
 
 			String n = field_name.string();
 			if (n == w) {
@@ -4245,13 +4251,14 @@ gb_internal Selection lookup_field_with_selection(Type *type_, InternedString fi
 			gb_local_persist String x = str_lit("x");
 			gb_local_persist String y = str_lit("y");
 			gb_local_persist String z = str_lit("z");
-			gb_local_persist Entity *entity__w = alloc_entity_field(nullptr, make_token_ident(w), t_f64, false, 3);
-			gb_local_persist Entity *entity__x = alloc_entity_field(nullptr, make_token_ident(x), t_f64, false, 0);
-			gb_local_persist Entity *entity__y = alloc_entity_field(nullptr, make_token_ident(y), t_f64, false, 1);
-			gb_local_persist Entity *entity__z = alloc_entity_field(nullptr, make_token_ident(z), t_f64, false, 2);
+			// Fresh per lookup (see the any selectors above).
+			Entity *entity__w = alloc_entity_field(nullptr, make_token_ident(w), t_f64, false, 3);
+			Entity *entity__x = alloc_entity_field(nullptr, make_token_ident(x), t_f64, false, 0);
+			Entity *entity__y = alloc_entity_field(nullptr, make_token_ident(y), t_f64, false, 1);
+			Entity *entity__z = alloc_entity_field(nullptr, make_token_ident(z), t_f64, false, 2);
 
 			gb_local_persist String xyz = str_lit("xyz");
-			gb_local_persist Entity *entity__xyz = alloc_entity_field(nullptr, make_token_ident(xyz), alloc_type_array(t_f64, 3), false, -1);
+			Entity *entity__xyz = alloc_entity_field(nullptr, make_token_ident(xyz), alloc_type_array(t_f64, 3), false, -1);
 
 			String n = field_name.string();
 			if (n == w) {
@@ -4283,10 +4290,11 @@ gb_internal Selection lookup_field_with_selection(Type *type_, InternedString fi
 			gb_local_persist String x = str_lit("x");
 			gb_local_persist String y = str_lit("y");
 			gb_local_persist String z = str_lit("z");
-			gb_local_persist Entity *entity__w = alloc_entity_field(nullptr, make_token_ident(w), t_untyped_float, false, 3);
-			gb_local_persist Entity *entity__x = alloc_entity_field(nullptr, make_token_ident(x), t_untyped_float, false, 0);
-			gb_local_persist Entity *entity__y = alloc_entity_field(nullptr, make_token_ident(y), t_untyped_float, false, 1);
-			gb_local_persist Entity *entity__z = alloc_entity_field(nullptr, make_token_ident(z), t_untyped_float, false, 2);
+			// Fresh per lookup (see the any selectors above).
+			Entity *entity__w = alloc_entity_field(nullptr, make_token_ident(w), t_untyped_float, false, 3);
+			Entity *entity__x = alloc_entity_field(nullptr, make_token_ident(x), t_untyped_float, false, 0);
+			Entity *entity__y = alloc_entity_field(nullptr, make_token_ident(y), t_untyped_float, false, 1);
+			Entity *entity__z = alloc_entity_field(nullptr, make_token_ident(z), t_untyped_float, false, 2);
 
 			String n = field_name.string();
 			if (n == w) {
@@ -4314,7 +4322,11 @@ gb_internal Selection lookup_field_with_selection(Type *type_, InternedString fi
 	} else if (type->kind == Type_DynamicArray) {
 		GB_ASSERT(t_allocator != nullptr);
 		String allocator_str = str_lit("allocator");
-		gb_local_persist Entity *entity__allocator = alloc_entity_field(nullptr, make_token_ident(allocator_str), t_allocator, false, 3);
+		// Fresh field entity per lookup, bound to the current run's
+		// Allocator: a persisted entity would retain a superseded
+		// checking run's type, and retyping shared static state from
+		// parallel checker workers would race.
+		Entity *entity__allocator = alloc_entity_field(nullptr, make_token_ident(allocator_str), t_allocator, false, 3);
 
 		String n = field_name.string();
 		if (n == allocator_str) {
@@ -4325,7 +4337,8 @@ gb_internal Selection lookup_field_with_selection(Type *type_, InternedString fi
 	} else if (type->kind == Type_Map) {
 		GB_ASSERT(t_allocator != nullptr);
 		String allocator_str = str_lit("allocator");
-		gb_local_persist Entity *entity__allocator = alloc_entity_field(nullptr, make_token_ident(allocator_str), t_allocator, false, 2);
+		// Same fresh-per-lookup treatment as the dynamic-array case.
+		Entity *entity__allocator = alloc_entity_field(nullptr, make_token_ident(allocator_str), t_allocator, false, 2);
 
 		String n = field_name.string();
 		if (n == allocator_str) {

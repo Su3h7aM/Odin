@@ -2,44 +2,37 @@
 package os
 
 import "base:runtime"
-import "base:intrinsics"
 
 import "core:sync"
-import "core:slice"
 import "core:strings"
-import "core:sys/linux"
-import "core:sys/posix"
 
+_ :: runtime
 _ :: sync
-_ :: slice
-_ :: linux
-_ :: posix
+_ :: strings
 
-when ODIN_NO_CRT {
+when !ODIN_NO_CRT {
 	// TODO: Override the libc environment functions' weak linkage to
 	//       allow us to interact with 3rd party code that DOES link
 	//       to libc. Otherwise, our environment can be out of sync.
 
-	NOT_FOUND :: -1
+	// NOTE: This environment is maintained by Odin, not libc. Changes made
+	// through core:os are not visible to libc's getenv when libc is linked,
+	// and changes made through libc are not visible here.
 
-	// the environment is a 0 delimited list of <key>=<value> strings
-	_env: [dynamic]string
+	_Env_Entry :: struct {
+		text:  string, // NUL-terminated KEY=VALUE, excluding the terminator
+		owned: bool,
+	}
 
-	_env_mutex: sync.Recursive_Mutex
+	// All environment state is guarded by _env_mutex.
+	_env: [dynamic]_Env_Entry
+	_env_mutex: sync.Mutex
+	_env_initialized: bool
 
-	// We need to be able to figure out if the environment variable
-	// is contained in the original environment or not. This also
-	// serves as a flag to determine if we have built _env.
-	_org_env_begin: uintptr // atomic
-	_org_env_end:   uintptr // guarded by _env_mutex
-
-	// Returns value + index location into _env
-	// or -1 if not found
+	// The caller must hold _env_mutex, including while using the returned value.
 	_lookup :: proc(key: string) -> (value: string, idx: int) {
-		sync.guard(&_env_mutex)
-
 		for entry, i in _env {
-			if k, v := _kv_from_entry(entry); k == key {
+			if k, v := _kv_from_entry(entry.text); k == key {
 				return v, i
 			}
 		}
@@ -47,8 +40,9 @@ when ODIN_NO_CRT {
 	}
 
 	_lookup_env_alloc :: proc(key: string, allocator: runtime.Allocator) -> (value: string, found: bool) {
-		if intrinsics.atomic_load_explicit(&_org_env_begin, .Acquire) == 0 {
-			_build_env()
+		sync.guard(&_env_mutex)
+		if _build_env() != nil {
+			return
 		}
 
 		if v, idx := _lookup(key); idx != -1 {
@@ -59,9 +53,8 @@ when ODIN_NO_CRT {
 	}
 
 	_lookup_env_buf :: proc(buf: []u8, key: string) -> (value: string, err: Error) {
-		if intrinsics.atomic_load_explicit(&_org_env_begin, .Acquire) == 0 {
-			_build_env()
-		}
+		sync.guard(&_env_mutex)
+		_build_env() or_return
 
 		if v, idx := _lookup(key); idx != -1 {
 			if len(buf) >= len(v) {
@@ -75,155 +68,126 @@ when ODIN_NO_CRT {
 
 	_lookup_env :: proc{_lookup_env_alloc, _lookup_env_buf}
 
-	_set_env :: proc(key, v_new: string) -> Error {
-		if intrinsics.atomic_load_explicit(&_org_env_begin, .Acquire) == 0 {
-			_build_env()
+	_set_env :: proc(key, value: string) -> Error {
+		if key == "" || strings.index_byte(key, '=') != -1 {
+			return _get_platform_error(.EINVAL)
 		}
 		sync.guard(&_env_mutex)
+		_build_env() or_return
 
-		// all key values are stored as "key=value\x00"
-		kv_size := len(key) + len(v_new) + 2
-		if v_curr, idx := _lookup(key); idx != NOT_FOUND {
-			if v_curr == v_new {
-				return nil
-			}
-
-			unordered_remove(&_env, idx)
-
-			if !_is_in_org_env(v_curr) {
-				// We allocated this key-value. Possibly resize and
-				// overwrite the value only. Otherwise, treat as if it
-				// wasn't in the environment in the first place.
-				k_addr, v_addr := _kv_addr_from_val(v_curr, key)
-				if len(v_new) > len(v_curr) {
-					old_size := len(key) + len(v_curr) + 2
-					k_addr = ([^]u8)(runtime.heap_resize(k_addr, old_size, kv_size))
-					if k_addr == nil {
-						return .Out_Of_Memory
-					}
-					v_addr = &k_addr[len(key) + 1]
-				}
-				intrinsics.mem_copy_non_overlapping(v_addr, raw_data(v_new), len(v_new))
-				v_addr[len(v_new)] = 0
-
-				append(&_env, string(k_addr[:kv_size - 1]))
-				return nil
-			}
+		old_value, idx := _lookup(key)
+		if idx != -1 && old_value == value {
+			return nil
 		}
 
-		k_addr := ([^]u8)(runtime.heap_alloc(kv_size))
-		if k_addr == nil {
-			return .Out_Of_Memory
+		// Allocate before replacing the old entry so failures leave it intact.
+		bytes := make([]u8, len(key) + len(value) + 2, runtime.heap_allocator()) or_return
+		copy(bytes, key)
+		bytes[len(key)] = '='
+		copy(bytes[len(key) + 1:], value)
+		entry := _Env_Entry{string(bytes[:len(bytes) - 1]), true}
+		if idx != -1 {
+			_free_env_entry(_env[idx])
+			_env[idx] = entry
+		} else {
+			if _, err := append(&_env, entry); err != nil {
+				_free_env_entry(entry)
+				return err
+			}
 		}
-		intrinsics.mem_copy_non_overlapping(k_addr, raw_data(key), len(key))
-		k_addr[len(key)] = '='
-
-		val_slice := k_addr[len(key) + 1:]
-		intrinsics.mem_copy_non_overlapping(&val_slice[0], raw_data(v_new), len(v_new))
-		val_slice[len(v_new)] = 0
-
-		append(&_env, string(k_addr[:kv_size - 1]))
 		return nil
 	}
 
 	_unset_env :: proc(key: string) -> bool {
-		if intrinsics.atomic_load_explicit(&_org_env_begin, .Acquire) == 0 {
-			_build_env()
+		if key == "" || strings.index_byte(key, '=') != -1 {
+			return false
 		}
 		sync.guard(&_env_mutex)
-
-		v: string
-		i: int
-		if v, i = _lookup(key); i == -1 {
-			return true
+		if _build_env() != nil {
+			return false
 		}
 
-		unordered_remove(&_env, i)
-
-		if _is_in_org_env(v) {
-			return true
+		// Keep the order of inherited entries, including duplicate names.
+		for i := 0; i < len(_env); {
+			if k, _ := _kv_from_entry(_env[i].text); k == key {
+				_free_env_entry(_env[i])
+				ordered_remove(&_env, i)
+			} else {
+				i += 1
+			}
 		}
-
-		// if we got this far, the environment variable
-		// existed AND was allocated by us.
-		k_addr, _ := _kv_addr_from_val(v, key)
-		runtime.heap_free(k_addr)
 		return true
 	}
 
 	_clear_env :: proc() {
 		sync.guard(&_env_mutex)
-
-		for kv in _env {
-			if !_is_in_org_env(kv) {
-				runtime.heap_free(raw_data(kv))
-			}
+		for entry in _env {
+			_free_env_entry(entry)
 		}
 		clear(&_env)
-
-		// nothing resides in the original environment either
-		intrinsics.atomic_store_explicit(&_org_env_begin, ~uintptr(0), .Release)
-		_org_env_end = ~uintptr(0)
+		_env.allocator = runtime.heap_allocator()
+		_env_initialized = true
 	}
 
 	_environ :: proc(allocator: runtime.Allocator) -> (environ: []string, err: Error) {
-		if intrinsics.atomic_load_explicit(&_org_env_begin, .Acquire) == 0 {
-			_build_env()
-		}
 		sync.guard(&_env_mutex)
+		_build_env() or_return
 
-		env := make([dynamic]string, 0, len(_env), allocator) or_return
+		env := make([]string, len(_env), allocator) or_return
 		defer if err != nil {
 			for e in env {
 				delete(e, allocator)
 			}
-			delete(env)
+			delete(env, allocator)
 		}
 
-		for entry in _env {
-			s := clone_string(entry, allocator) or_return
-			append(&env, s)
+		for entry, i in _env {
+			env[i] = clone_string(entry.text, allocator) or_return
 		}
-		environ = env[:]
+		return env, nil
+	}
+
+	// Returns an independent, nil-terminated snapshot. Both the strings and the
+	// pointer slice must be freed with allocator.
+	export_cstring_environment :: proc(allocator: runtime.Allocator) -> (env: []cstring, err: Error) {
+		sync.guard(&_env_mutex)
+		_build_env() or_return
+
+		env = make([]cstring, len(_env) + 1, allocator) or_return
+		defer if err != nil {
+			for entry in env {
+				delete(entry, allocator)
+			}
+			delete(env, allocator)
+			env = nil
+		}
+		for entry, i in _env {
+			env[i] = clone_to_cstring(entry.text, allocator) or_return
+		}
 		return
 	}
 
-	// The entire environment is stored as 0 terminated strings,
-	// so there is no need to clone/free individual variables
-	export_cstring_environment :: proc(allocator: runtime.Allocator) -> []cstring {
-		if intrinsics.atomic_load_explicit(&_org_env_begin, .Acquire) == 0 {
-			// The environment has not been modified, so we can just
-			// send the original environment
-			org_env := _get_original_env()
-			n: int
-			for ; org_env[n] != nil; n += 1 {}
-			return slice.clone(org_env[:n + 1], allocator)
+	// The caller must hold _env_mutex.
+	_build_env :: proc() -> Error {
+		if _env_initialized {
+			return nil
 		}
-		sync.guard(&_env_mutex)
 
-		// NOTE: already terminated by nil pointer via + 1
-		env := make([]cstring, len(_env) + 1, allocator)
-
-		for entry, i in _env {
-			env[i] = cstring(raw_data(entry))
+		cstring_env := _get_original_env()
+		n: int
+		for ; cstring_env[n] != nil; n += 1 {}
+		env := make([dynamic]_Env_Entry, n, n, runtime.heap_allocator()) or_return
+		for i in 0..<n {
+			env[i] = _Env_Entry{string(cstring_env[i]), false}
 		}
-		return env
+		_env = env
+		_env_initialized = true
+		return nil
 	}
 
-	_build_env :: proc() {
-		sync.guard(&_env_mutex)
-		if intrinsics.atomic_load_explicit(&_org_env_begin, .Acquire) != 0 {
-			return
-		}
-
-		_env = make(type_of(_env), runtime.heap_allocator())
-		cstring_env := _get_original_env()
-		intrinsics.atomic_store_explicit(&_org_env_begin, uintptr(rawptr(cstring_env[0])), .Release)
-		for i := 0; cstring_env[i] != nil; i += 1 {
-			bytes := ([^]u8)(cstring_env[i])
-			n := len(cstring_env[i])
-			_org_env_end = uintptr(&bytes[n])
-			append(&_env, string(bytes[:n]))
+	_free_env_entry :: proc(entry: _Env_Entry) {
+		if entry.owned {
+			delete(entry.text, runtime.heap_allocator())
 		}
 	}
 
@@ -242,132 +206,4 @@ when ODIN_NO_CRT {
 		return entry[:eq_idx], entry[eq_idx + 1:]
 	}
 
-	_kv_addr_from_val :: #force_inline proc(val: string, key: string) -> ([^]u8, [^]u8) {
-		v_addr := raw_data(val)
-		k_addr := ([^]u8)(&v_addr[-(len(key) + 1)])
-		return k_addr, v_addr
-	}
-
-	_is_in_org_env :: #force_inline proc(env_data: string) -> bool {
-		addr := uintptr(raw_data(env_data))
-		return addr >= intrinsics.atomic_load_explicit(&_org_env_begin, .Acquire) && addr < _org_env_end
-	}
-
-} else {
-
-	_lookup_env_alloc :: proc(key: string, allocator: runtime.Allocator) -> (value: string, found: bool) {
-		if key == "" {
-			return
-		}
-
-		temp_allocator := TEMP_ALLOCATOR_GUARD({ allocator })
-
-		ckey := strings.clone_to_cstring(key, temp_allocator)
-		cval := posix.getenv(ckey)
-		if cval == nil {
-			return
-		}
-
-		found = true
-		value = strings.clone(string(cval), allocator) // NOTE(laytan): what if allocation fails?
-
-		return
-	}
-
-	_lookup_env_buf :: proc(buf: []u8, key: string) -> (value: string, error: Error) {
-		if key == "" {
-			return
-		}
-
-		if len(key) + 1 > len(buf) {
-			return "", .Buffer_Full
-		} else {
-			copy(buf, key)
-			buf[len(key)] = 0
-		}
-
-		cval := posix.getenv(cstring(raw_data(buf)))
-		if cval == nil {
-			return
-		}
-
-		if value = string(cval); value == "" {
-			return "", .Env_Var_Not_Found
-		} else {
-			if len(value) > len(buf) {
-				return "", .Buffer_Full
-			} else {
-				copy(buf, value)
-				return string(buf[:len(value)]), nil
-			}
-		}
-	}
-
-	_lookup_env :: proc{_lookup_env_alloc, _lookup_env_buf}
-
-	_set_env :: proc(key, value: string) -> (err: Error) {
-		temp_allocator := TEMP_ALLOCATOR_GUARD({})
-
-		ckey := strings.clone_to_cstring(key, temp_allocator) or_return
-		cval := strings.clone_to_cstring(value, temp_allocator) or_return
-
-		if posix.setenv(ckey, cval, true) != nil {
-			posix_errno := posix.errno()
-			linux_errno := cast(linux.Errno)(cast(int)posix_errno)
-			err = _get_platform_error(linux_errno)
-		}
-		return
-	}
-
-	_unset_env :: proc(key: string) -> (ok: bool) {
-		temp_allocator := TEMP_ALLOCATOR_GUARD({})
-
-		ckey := strings.clone_to_cstring(key, temp_allocator)
-
-		ok = posix.unsetenv(ckey) == .OK
-		return
-	}
-
-	// NOTE(laytan): clearing the env is weird, why would you ever do that?
-
-	_clear_env :: proc() {
-		for entry := posix.environ[0]; entry != nil; entry = posix.environ[0] {
-			key := strings.truncate_to_byte(string(entry), '=')
-			_unset_env(key)
-		}
-	}
-
-	_environ :: proc(allocator: runtime.Allocator) -> (environ: []string, err: Error) {
-		n := 0
-		for entry := posix.environ[0]; entry != nil; n += 1 {
-			entry = posix.environ[n]
-		}
-
-		r := make([dynamic]string, 0, n, allocator) or_return
-		defer if err != nil {
-			for e in r {
-				delete(e, allocator)
-			}
-			delete(r)
-		}
-
-		for i, entry := 0, posix.environ[0]; entry != nil; i += 1 {
-			entry = posix.environ[i]
-			append(&r, strings.clone(string(entry), allocator) or_return)
-		}
-
-		environ = r[:]
-		return
-	}
-
-
-
-	export_cstring_environment :: proc(allocator: runtime.Allocator) -> []cstring {
-		env := make([dynamic]cstring, allocator)
-		for i, entry := 0, posix.environ[0]; entry != nil; i, entry = i+1, posix.environ[i] {
-			append(&env, entry)
-		}
-		append(&env, nil)
-		return env[:]
-	}
 }

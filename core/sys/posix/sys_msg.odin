@@ -3,53 +3,56 @@ package posix
 
 import "core:c"
 
-when ODIN_OS == .Darwin {
-	foreign import lib "system:System"
-} else {
-	foreign import lib "system:c"
-}
+// The Linux implementation is in the matching _linux.odin file.
+when ODIN_OS != .Linux {
+	when ODIN_OS == .Darwin {
+		foreign import lib "system:System"
+	} else {
+		foreign import lib "system:c"
+	}
 
-// sys/msg.h = XSI message queue structures
+	// sys/msg.h = XSI message queue structures
 
-foreign lib {
-	/*
-	Provides various operation as specified by the given cmd.
+	foreign lib {
+		/*
+		Provides various operation as specified by the given cmd.
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/msgctl.html ]]
-	*/
-	@(link_name=LMSGCTL)
-	msgctl :: proc(msqid: FD, cmd: IPC_Cmd, buf: ^msqid_ds) -> result ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/msgctl.html ]]
+		*/
+		@(link_name=LMSGCTL)
+		msgctl :: proc(msqid: FD, cmd: IPC_Cmd, buf: ^msqid_ds) -> result ---
 
-	/*
-	Returns the message queue identifier associated with the argument key.
+		/*
+		Returns the message queue identifier associated with the argument key.
 
-	Returns: -1 (setting errno) on failure, the identifier otherwise
+		Returns: -1 (setting errno) on failure, the identifier otherwise
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/msgget.html ]]
-	*/
-	msgget :: proc(key: key_t, msgflg: IPC_Flags) -> FD ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/msgget.html ]]
+		*/
+		msgget :: proc(key: key_t, msgflg: IPC_Flags) -> FD ---
 
-	/*
-	Read a message from the queue.
+		/*
+		Read a message from the queue.
 
-	Returns: -1 (setting errno) on failure, the bytes received otherwise
+		Returns: -1 (setting errno) on failure, the bytes received otherwise
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/msgrcv.html ]]
-	*/
-	msgrcv :: proc(
-		msgid:  FD,
-		msgp:   rawptr,
-		msgsz:  c.size_t,
-		msgtyp: c.long,
-		msgflg: IPC_Flags,
-	) -> c.ssize_t ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/msgrcv.html ]]
+		*/
+		msgrcv :: proc(
+			msgid:  FD,
+			msgp:   rawptr,
+			msgsz:  c.size_t,
+			msgtyp: c.long,
+			msgflg: IPC_Flags,
+		) -> c.ssize_t ---
 
-	/*
-	Send a message on the queue.
+		/*
+		Send a message on the queue.
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/msgsnd.html ]]
-	*/
-	msgsnd :: proc(msgid: FD, msgp: rawptr, msgsz: c.size_t, msgflg: IPC_Flags) -> result ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/msgsnd.html ]]
+		*/
+		msgsnd :: proc(msgid: FD, msgp: rawptr, msgsz: c.size_t, msgflg: IPC_Flags) -> result ---
+	}
 }
 
 when ODIN_OS == .NetBSD {

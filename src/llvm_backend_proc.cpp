@@ -111,12 +111,23 @@ gb_internal lbProcedure *lb_create_procedure(lbModule *m, Entity *entity, bool i
 		link_name = lb_get_entity_name(m, entity);
 	}
 
+	// Set when a foreign declaration already owns this link name in this
+	// module and the requested entity carries the real implementation body.
+	bool reuse_declaration_symbol = false;
 	{
 		StringHashKey key = string_hash_string(link_name);
 		lbValue *found = string_map_get(&m->members, key);
 		if (found) {
-			lb_add_entity(m, entity, *found);
-			return string_map_must_get(&m->procedures, key);
+			lbProcedure *found_proc = string_map_must_get(&m->procedures, key);
+			// A foreign declaration must not swallow a real implementation
+			// sharing its link name in the same module: fall through and
+			// emit the body onto the existing symbol below. Every other
+			// collision keeps its behavior.
+			reuse_declaration_symbol = found_proc->is_foreign && !entity->Procedure.is_foreign;
+			if (!reuse_declaration_symbol) {
+				lb_add_entity(m, entity, *found);
+				return found_proc;
+			}
 		}
 	}
 
@@ -174,6 +185,9 @@ gb_internal lbProcedure *lb_create_procedure(lbModule *m, Entity *entity, bool i
 		// declaration would be renamed and so no longer be the intrinsic
 		LLVMValueRef existing = nullptr;
 		if (p->is_foreign && string_starts_with(p->name, str_lit("llvm."))) {
+			existing = LLVMGetNamedFunction(m->mod, c_link_name);
+		}
+		if (existing == nullptr && reuse_declaration_symbol) {
 			existing = LLVMGetNamedFunction(m->mod, c_link_name);
 		}
 		if (existing != nullptr && LLVMGlobalGetValueType(existing) == func_type) {

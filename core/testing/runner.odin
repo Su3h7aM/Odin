@@ -81,6 +81,11 @@ get_log_level :: #force_inline proc() -> runtime.Logger_Level {
 @(private) global_log_colors_disabled: bool
 @(private) global_ansi_disabled: bool
 
+// Without the CRT on Linux, `thread.terminate` is unavailable, so the runner
+// cannot stop a test that is still running. It reports such a test and ends
+// the process with a failing status instead of waiting for it.
+@(private) CANNOT_TERMINATE_TASKS :: ODIN_OS == .Linux && ODIN_NO_CRT
+
 JSON :: struct {
 	total:    int,
 	success:  int,
@@ -571,6 +576,9 @@ runner :: proc(internal_tests: []Internal_Test) -> bool {
 
 	signals_were_raised := false
 
+	// Set when a running test cannot be stopped and the pool must not be joined.
+	pool_abandoned := false
+
 	if should_show_animations {
 		redraw_report(stdout, report)
 		draw_status_bar(stdout, thread_count_status_string, total_done_count, total_test_count)
@@ -611,7 +619,7 @@ runner :: proc(internal_tests: []Internal_Test) -> bool {
 	start_time := time.now()
 
 	thread.pool_start(&pool)
-	main_loop: for !thread.pool_is_empty(&pool) {
+	main_loop: for !pool_abandoned && !thread.pool_is_empty(&pool) {
 		{
 			events_pending := thread.pool_num_done(&pool) > 0
 
@@ -748,10 +756,15 @@ runner :: proc(internal_tests: []Internal_Test) -> bool {
 				continue check_timeouts
 			}
 
-			if !thread.pool_stop_task(&pool, timeout.test_index) {
-				// The task may have stopped a split second after we started
-				// checking, but we haven't handled the new state yet.
-				continue check_timeouts
+			when CANNOT_TERMINATE_TASKS {
+				// The test is still running and cannot be stopped.
+				pool_abandoned = true
+			} else {
+				if !thread.pool_stop_task(&pool, timeout.test_index) {
+					// The task may have stopped a split second after we started
+					// checking, but we haven't handled the new state yet.
+					continue check_timeouts
+				}
 			}
 
 			#no_bounds_check report.all_test_states[timeout.test_index] = .Failed
@@ -775,17 +788,24 @@ runner :: proc(internal_tests: []Internal_Test) -> bool {
 			})
 			fmt.assertf(alloc_error == nil, "Error appending to log messages: %v", alloc_error)
 
-			find_task_data_for_timeout: for &data in task_data_slots {
-				if data.it.pkg == it.pkg && data.it.name == it.name {
-					end_t(&data.t)
-					break find_task_data_for_timeout
+			// The cleanups of a test that is still running are not safe to run.
+			when !CANNOT_TERMINATE_TASKS {
+				find_task_data_for_timeout: for &data in task_data_slots {
+					if data.it.pkg == it.pkg && data.it.name == it.name {
+						end_t(&data.t)
+						break find_task_data_for_timeout
+					}
 				}
 			}
 		}
 
 		if should_stop_runner() {
 			fmt.wprintln(stderr, "\nCaught interrupt signal. Stopping all tests.")
-			thread.pool_shutdown(&pool)
+			when CANNOT_TERMINATE_TASKS {
+				pool_abandoned = true
+			} else {
+				thread.pool_shutdown(&pool)
+			}
 			break main_loop
 		}
 
@@ -911,7 +931,9 @@ runner :: proc(internal_tests: []Internal_Test) -> bool {
 	//
 	// At the time of writing, the thread library is undergoing a rewrite that
 	// should solve this problem; it is not an issue with the test runner itself.
-	thread.pool_join(&pool)
+	if !pool_abandoned {
+		thread.pool_join(&pool)
+	}
 
 	finished_in := time.since(start_time)
 
@@ -1016,6 +1038,11 @@ To partly mitigate this, redirect STDERR to a file or use the -define:ODIN_TEST_
 		}
 	}
 
+	if pool_abandoned {
+		fmt.wprintln(batch_writer, `
+Tests cannot be stopped without the CRT on Linux, so the test run was ended while they were still running.`)
+	}
+
 	fmt.wprintln(stderr, bytes.buffer_to_string(&batch_buffer))
 
 	when JSON_REPORT != "" {
@@ -1042,6 +1069,11 @@ To partly mitigate this, redirect STDERR to a file or use the -define:ODIN_TEST_
 
 		json_err := json.marshal_to_writer(os.to_stream(json_fd), json_report, &{ pretty = true })
 		fmt.assertf(json_err == nil, "Error writing JSON report: %v", json_err)
+	}
+
+	if pool_abandoned {
+		// Returning would destroy the pool, which waits for the running tests.
+		os.exit(1)
 	}
 
 	return total_success_count == total_test_count

@@ -471,9 +471,17 @@ _process_start :: proc(desc: Process_Desc) -> (process: Process, err: Error) {
 
 	// Use current process' environment if description didn't provide it.
 	env: [^]cstring
+	env_snapshot: []cstring
+	defer if env_snapshot != nil {
+		for entry in env_snapshot {
+			delete(entry, temp_allocator)
+		}
+		delete(env_snapshot, temp_allocator)
+	}
 	if desc.env == nil {
 		// take this process's current environment
-		env = raw_data(export_cstring_environment(temp_allocator))
+		env_snapshot = export_cstring_environment(temp_allocator) or_return
+		env = raw_data(env_snapshot)
 	} else {
 		cenv := make([]cstring, len(desc.env) + 1, temp_allocator) or_return
 		for env, i in desc.env {

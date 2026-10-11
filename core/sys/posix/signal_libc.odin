@@ -6,37 +6,38 @@ import "base:intrinsics"
 import "core:c"
 import "core:c/libc"
 
-when ODIN_OS == .Windows {
-	foreign import lib "system:libucrt.lib"
-} else when ODIN_OS == .Darwin {
-	foreign import lib "system:System"
-} else {
-	foreign import lib "system:c"
-}
+// The Linux implementation is in signal_linux.odin.
+when ODIN_OS != .Linux || size_of(rawptr) == 4 {
+	when ODIN_OS == .Windows {
+		foreign import lib "system:libucrt.lib"
+	} else when ODIN_OS == .Darwin {
+		foreign import lib "system:System"
+	} else {
+		foreign import lib "system:c"
+	}
 
-// signal.h - signals
+	// signal.h - signals
 
-foreign lib {
-	/*
-	Set a signal handler.
+	foreign lib {
+		/*
+		Set a signal handler.
 
-	func can either be:
-	- `auto_cast posix.SIG_DFL` setting the default handler for that specific signal
-	- `auto_cast posix.SIG_IGN` causing the specific signal to be ignored
-	- a custom signal handler
+		func can either be:
+		- `auto_cast posix.SIG_DFL` setting the default handler for that specific signal
+		- `auto_cast posix.SIG_IGN` causing the specific signal to be ignored
+		- a custom signal handler
 
-	Returns: SIG_ERR (setting errno), the last value of func on success
+		Returns: SIG_ERR (setting errno), the last value of func on success
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/signal.html ]]
-	*/
-	signal :: proc(sig: Signal, func: proc "c" (Signal)) -> proc "c" (Signal) ---
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/signal.html ]]
+		*/
+		signal :: proc(sig: Signal, func: proc "c" (Signal)) -> proc "c" (Signal) ---
 
-	/*
-	Raises a signal, calling its handler and then returning.
+		/*
+		Raises a signal, calling its handler and then returning.
 
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/raise.html ]]
-	*/
-	when ODIN_OS != .Linux {
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/raise.html ]]
+		*/
 		raise :: proc(sig: Signal) -> result ---
 	}
 }

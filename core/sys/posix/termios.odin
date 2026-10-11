@@ -5,7 +5,7 @@ import "core:c"
 
 when ODIN_OS == .Darwin {
 	foreign import lib "system:System"
-} else {
+} else when ODIN_OS != .Linux {
 	foreign import lib "system:c"
 }
 
@@ -17,56 +17,72 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/cfgetispeed.html ]]
 	*/
-	cfgetispeed :: proc(termios_p: ^termios) -> speed_t ---
+	when ODIN_OS != .Linux {
+		cfgetispeed :: proc(termios_p: ^termios) -> speed_t ---
+	}
 
 	/*
 	Set the input baud rate.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/cfsetispeed.html ]]
 	*/
-	cfsetispeed :: proc(termios_p: ^termios, rate: speed_t) -> result ---
+	when ODIN_OS != .Linux {
+		cfsetispeed :: proc(termios_p: ^termios, rate: speed_t) -> result ---
+	}
 
 	/*
 	Get the output baud rate.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/cfgetospeed.html ]]
 	*/
-	cfgetospeed :: proc(termios_p: ^termios) -> speed_t ---
+	when ODIN_OS != .Linux {
+		cfgetospeed :: proc(termios_p: ^termios) -> speed_t ---
+	}
 
 	/*
 	Set the output baud rate.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/cfsetospeed.html ]]
 	*/
-	cfsetospeed :: proc(termios_p: ^termios, rate: speed_t) -> result ---
+	when ODIN_OS != .Linux {
+		cfsetospeed :: proc(termios_p: ^termios, rate: speed_t) -> result ---
+	}
 
 	/*
 	Wait for transmission of output.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/tcdrain.html ]]
 	*/
-	tcdrain :: proc(fildes: FD) -> result ---
+	when ODIN_OS != .Linux {
+		tcdrain :: proc(fildes: FD) -> result ---
+	}
 
 	/*
 	Suspend or restart the transmission or reception of data.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/tcflow.html ]]
 	*/
-	tcflow :: proc(fildes: FD, action: TC_Action) -> result ---
+	when ODIN_OS != .Linux {
+		tcflow :: proc(fildes: FD, action: TC_Action) -> result ---
+	}
 
 	/*
 	Flush non-transmitted output data, non-read input data, or both.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/tcflush.html ]]
 	*/
-	tcflush :: proc(fildes: FD, queue_selector: TC_Queue) -> result ---
+	when ODIN_OS != .Linux {
+		tcflush :: proc(fildes: FD, queue_selector: TC_Queue) -> result ---
+	}
 
 	/*
 	Get the parameters associated with the terminal.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/tcgetattr.html ]]
 	*/
-	tcgetattr :: proc(fildes: FD, termios_p: ^termios) -> result ---
+	when ODIN_OS != .Linux {
+		tcgetattr :: proc(fildes: FD, termios_p: ^termios) -> result ---
+	}
 
 	/*
 	Get the process group ID for the session leader for the controlling terminal.
@@ -75,21 +91,27 @@ foreign lib {
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/tcgetsid.html ]]
 	*/
-	tcgetsid :: proc(fildes: FD) -> pid_t ---
+	when ODIN_OS != .Linux {
+		tcgetsid :: proc(fildes: FD) -> pid_t ---
+	}
 
 	/*
 	Send a break for a specific duration.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/tcsendbreak.html ]]
 	*/
-	tcsendbreak :: proc(fildes: FD, duration: c.int) -> result ---
+	when ODIN_OS != .Linux {
+		tcsendbreak :: proc(fildes: FD, duration: c.int) -> result ---
+	}
 
 	/*
 	Set the parameters associated with the terminal.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/tcsetattr.html ]]
 	*/
-	tcsetattr :: proc(fildes: FD, optional_actions: TC_Optional_Action, termios_p: ^termios) -> result ---
+	when ODIN_OS != .Linux {
+		tcsetattr :: proc(fildes: FD, optional_actions: TC_Optional_Action, termios_p: ^termios) -> result ---
+	}
 }
 
 Control_Char :: enum c.int {
@@ -586,7 +608,7 @@ when ODIN_OS == .Darwin {
 	ICANON :: 0x00000002
 	IEXTEN :: 0x00008000
 	ISIG   :: 0x00000001
-	NOFLSH :: 0x80000080
+	NOFLSH :: 0x00000080
 	TOSTOP :: 0x00000100
 
 	TCIFLUSH  :: 0
