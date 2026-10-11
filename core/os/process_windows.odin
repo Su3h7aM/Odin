@@ -503,13 +503,17 @@ _process_start :: proc(desc: Process_Desc) -> (process: Process, err: Error) {
 
 	working_dir_w := (win32_utf8_to_wstring(desc.working_dir, temp_allocator) or_else nil) if len(desc.working_dir) > 0 else nil
 	process_info: win32.PROCESS_INFORMATION
+	creation_flags: win32.DWORD = win32.CREATE_UNICODE_ENVIRONMENT|win32.NORMAL_PRIORITY_CLASS
+	if desc.new_group {
+		creation_flags |= win32.CREATE_NEW_PROCESS_GROUP
+	}
 	ok := win32.CreateProcessW(
 		nil,
 		command_line_w,
 		nil,
 		nil,
 		true,
-		win32.CREATE_UNICODE_ENVIRONMENT|win32.NORMAL_PRIORITY_CLASS,
+		creation_flags,
 		raw_data(environment_block_w),
 		working_dir_w,
 		&win32.STARTUPINFOW{
@@ -588,6 +592,11 @@ _process_kill :: proc(process: Process) -> Error {
 		return _get_platform_error()
 	}
 	return nil
+}
+
+@(private="package")
+_process_kill_group :: proc(process: Process) -> Error {
+	return .Unsupported
 }
 
 @(private="package")

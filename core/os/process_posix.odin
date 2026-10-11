@@ -174,6 +174,10 @@ _process_start :: proc(desc: Process_Desc) -> (process: Process, err: Error) {
 			if posix.chdir(cwd) != .OK { abort(pipe[WRITE]) }
 		}
 
+		if desc.new_group {
+			if posix.setpgid(0, 0) != .OK { abort(pipe[WRITE]) }
+		}
+
 		res := posix.execve(strings.to_cstring(&exe_builder) or_return, raw_data(cmd), env)
 		assert(res == -1)
 		abort(pipe[WRITE])
@@ -331,6 +335,10 @@ _process_wait :: proc(process: Process, timeout: time.Duration) -> (process_stat
 }
 
 _process_kill :: proc(process: Process) -> (err: Error) {
+	// A pid of zero or below would signal the calling process group or every process.
+	if process.pid <= 0 {
+		return posix.Errno.ESRCH
+	}
 	_process_handle_still_valid(process) or_return
 
 	if posix.kill(posix.pid_t(process.pid), .SIGKILL) != .OK {
@@ -340,7 +348,23 @@ _process_kill :: proc(process: Process) -> (err: Error) {
 	return
 }
 
+_process_kill_group :: proc(process: Process) -> (err: Error) {
+	if process.pid <= 0 {
+		return posix.Errno.ESRCH
+	}
+	_process_handle_still_valid(process) or_return
+
+	if posix.killpg(posix.pid_t(process.pid), .SIGKILL) != .OK {
+		err = _get_platform_error()
+	}
+
+	return
+}
+
 _process_terminate :: proc(process: Process) -> (err: Error) {
+	if process.pid <= 0 {
+		return posix.Errno.ESRCH
+	}
 	_process_handle_still_valid(process) or_return
 
 	if posix.kill(posix.pid_t(process.pid), .SIGTERM) != .OK {

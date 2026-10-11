@@ -351,6 +351,10 @@ Process_Desc :: struct {
 	// or a readable end of a pipe. Passing a `nil` will shut down the process'
 	// input.
 	stdin: ^File,
+	// If true, the child is started as the leader of a new process group, so
+	// that `process_kill_group` can signal it together with its descendants.
+	// On Windows this sets `CREATE_NEW_PROCESS_GROUP`.
+	new_group: bool,
 }
 
 /*
@@ -539,6 +543,26 @@ The process is forced to exit and can't ignore the request.
 @(require_results)
 process_kill :: proc(process: Process) -> (Error) {
 	return _process_kill(process)
+}
+
+/*
+Kill a process group.
+
+This procedure sends the kill signal to every process in the process group
+whose ID is the pid of `process`, which includes the descendants of `process`
+that did not leave the group.
+
+The process must have been started with `Process_Desc.new_group` set to true.
+Otherwise no group with that ID exists, or it is an unrelated one.
+
+Call this before `process_wait`, as the pid can be reused after the process
+has been reaped.
+
+Returns `Unsupported` on Windows, which cannot signal a process group.
+*/
+@(require_results)
+process_kill_group :: proc(process: Process) -> (Error) {
+	return _process_kill_group(process)
 }
 
 /*

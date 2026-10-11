@@ -573,6 +573,12 @@ _process_start :: proc(desc: Process_Desc) -> (process: Process, err: Error) {
 			}
 		}
 
+		if desc.new_group {
+			if errno = linux.setpgid(0, 0); errno != .NONE {
+				write_errno_to_parent_and_abort(child_pipe_fds[WRITE], errno)
+			}
+		}
+
 		errno = linux.execveat(dir_fd, exe_path, &cargs[0], env)
 		assert(errno != nil)
 		write_errno_to_parent_and_abort(child_pipe_fds[WRITE], errno)
@@ -870,10 +876,26 @@ _process_close :: proc(process: Process) -> Error {
 
 @(private="package")
 _process_kill :: proc(process: Process) -> Error {
+	// A pid of zero or below would signal the calling process group or every process.
+	if process.pid <= 0 {
+		return _get_platform_error(.ESRCH)
+	}
 	return _get_platform_error(linux.kill(linux.Pid(process.pid), .SIGKILL))
 }
 
 @(private="package")
+_process_kill_group :: proc(process: Process) -> Error {
+	// A pid of zero or below would signal the calling process group or every process.
+	if process.pid <= 0 {
+		return _get_platform_error(.ESRCH)
+	}
+	return _get_platform_error(linux.kill(-linux.Pid(process.pid), .SIGKILL))
+}
+
+@(private="package")
 _process_terminate :: proc(process: Process) -> Error {
+	if process.pid <= 0 {
+		return _get_platform_error(.ESRCH)
+	}
 	return _get_platform_error(linux.kill(linux.Pid(process.pid), .SIGTERM))
 }
