@@ -412,6 +412,9 @@ MFD_HUGE_16GB       :: transmute(Memfd_Create_Flags)(u32(34) << MAP_HUGE_SHIFT)
 /* Get window size */
 TIOCGWINSZ :: 0x5413
 
+/* Get terminal attributes; succeeds on terminals, fails with ENOTTY otherwise */
+TCGETS :: 0x5401
+
 IORING_TIMEOUT_CLOCK_MASK  :: IO_Uring_Timeout_Flags{.BOOTTIME, .REALTIME}
 IORING_TIMEOUT_UPDATE_MASK :: IO_Uring_Timeout_Flags{.UPDATE, .LINK_TIMEOUT_UPDATE}
 
