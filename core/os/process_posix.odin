@@ -44,7 +44,7 @@ _current_process_info :: proc(selection: Process_Info_Fields, allocator: runtime
 
 _process_start :: proc(desc: Process_Desc) -> (process: Process, err: Error) {
 	if len(desc.command) == 0 {
-		err = .Invalid_Path
+		err = .Invalid_Command
 		return
 	}
 
@@ -205,14 +205,15 @@ _process_start :: proc(desc: Process_Desc) -> (process: Process, err: Error) {
 
 			for {
 				info: posix.siginfo_t
-				wpid := posix.waitid(.P_PID, posix.id_t(process.pid), &info, {.EXITED})
+				wpid := posix.waitid(.P_PID, posix.id_t(pid), &info, {.EXITED})
 				if wpid == -1 && posix.errno() == .EINTR {
 					continue
 				}
 				break
 			}
 
-			err = errno
+			process.pid = 0
+			err = _get_platform_error(errno)
 			return
 		}
 
