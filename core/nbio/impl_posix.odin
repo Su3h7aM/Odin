@@ -486,7 +486,7 @@ _associate_handle :: proc(handle: uintptr, l: ^Event_Loop) -> (Handle, Associati
 		return Handle(handle), nil
 	}
 
-	if posix.fcntl(posix.FD(handle), .SETFL, flags) < 0 {
+	if posix.fcntl(posix.FD(handle), .SETFL, flags + {.NONBLOCK}) < 0 {
 		#partial switch errno := posix.errno(); errno {
 		case .EBADF: return -1, .Invalid_Handle
 		case:        return -1, Association_Error(errno)
