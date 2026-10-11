@@ -132,16 +132,29 @@ z_bit_reverse :: #force_inline proc(n: u16, bits: u8) -> (r: u16) {
 
 
 @(optimization_mode="favor_size")
-grow_buffer :: proc(buf: ^[dynamic]u8) -> (err: compress.Error) {
+grow_buffer :: proc(buf: ^[dynamic]u8, needed: int) -> (err: compress.Error) {
 	/*
 		That we get here at all means that we didn't pass an expected output size,
 		or that it was too little.
 	*/
 
 	/*
-		Double until we reach the maximum allowed.
+		Grow buf so that it can hold at least `needed` bytes,
+		doubling up to COMPRESS_OUTPUT_ALLOCATE_MAX.
 	*/
-	new_size := min(len(buf) << 1, compress.COMPRESS_OUTPUT_ALLOCATE_MAX)
+	if needed < 0 || needed > compress.COMPRESS_OUTPUT_ALLOCATE_MAX {
+		return .Output_Too_Short
+	}
+	if len(buf) >= needed {
+		return nil
+	}
+	// len(buf) < needed <= COMPRESS_OUTPUT_ALLOCATE_MAX here.
+	// Saturate at COMPRESS_OUTPUT_ALLOCATE_MAX so doubling cannot overflow.
+	new_size := compress.COMPRESS_OUTPUT_ALLOCATE_MAX
+	if len(buf) <= compress.COMPRESS_OUTPUT_ALLOCATE_MAX / 2 {
+		new_size = len(buf) * 2
+	}
+	new_size = max(new_size, needed)
 	return resize(buf, new_size)
 }
 
@@ -154,8 +167,12 @@ write_byte :: #force_inline proc(z: ^$C, c: u8) -> (err: io.Error) #no_bounds_ch
 	/*
 		Resize if needed.
 	*/
-	if int(z.bytes_written) + 1 >= len(z.output.buf) {
-		e := grow_buffer(&z.output.buf)
+	needed := z.bytes_written + 1
+	if needed > i64(compress.COMPRESS_OUTPUT_ALLOCATE_MAX) {
+		return .Short_Write
+	}
+	if needed > i64(len(z.output.buf)) {
+		e := grow_buffer(&z.output.buf, int(needed))
 		if e != nil {
 			return .Short_Write
 		}
@@ -179,8 +196,12 @@ repl_byte :: proc(z: ^$C, count: u16, c: u8) -> (err: io.Error) #no_bounds_check
 	/*
 	Resize if needed.
 	*/
-	if int(z.bytes_written) + int(count) >= len(z.output.buf) {
-		e := grow_buffer(&z.output.buf)
+	needed := z.bytes_written + i64(count)
+	if needed > i64(compress.COMPRESS_OUTPUT_ALLOCATE_MAX) {
+		return .Short_Write
+	}
+	if needed > i64(len(z.output.buf)) {
+		e := grow_buffer(&z.output.buf, int(needed))
 		if e != nil {
 			return .Short_Write
 		}
@@ -206,8 +227,12 @@ repl_bytes :: proc(z: ^$C, count: u16, distance: u16) -> (err: io.Error) {
 
 	offset := i64(distance)
 
-	if int(z.bytes_written) + int(count) >= len(z.output.buf) {
-		e := grow_buffer(&z.output.buf)
+	needed := z.bytes_written + i64(count)
+	if needed > i64(compress.COMPRESS_OUTPUT_ALLOCATE_MAX) {
+		return .Short_Write
+	}
+	if needed > i64(len(z.output.buf)) {
+		e := grow_buffer(&z.output.buf, int(needed))
 		if e != nil {
 			return .Short_Write
 		}
@@ -484,13 +509,19 @@ inflate_raw :: proc(z: ^$C, expected_output_size := -1, allocator := context.all
 	expected_output_size := expected_output_size
 
 	/*
-		Always set up a minimum allocation size.
+		Reject an explicitly oversized expectation before applying the minimum,
+		then clamp the initial allocation to the maximum so a configured
+		COMPRESS_OUTPUT_ALLOCATE_MIN larger than COMPRESS_OUTPUT_ALLOCATE_MAX
+		still inflates short streams.
 	*/
-	expected_output_size = max(max(expected_output_size, compress.COMPRESS_OUTPUT_ALLOCATE_MIN), 512)
+	if expected_output_size > compress.COMPRESS_OUTPUT_ALLOCATE_MAX {
+		return .Output_Too_Short
+	}
+	expected_output_size = min(max(max(expected_output_size, compress.COMPRESS_OUTPUT_ALLOCATE_MIN), 512), compress.COMPRESS_OUTPUT_ALLOCATE_MAX)
 
 	// fmt.printf("\nZLIB: Expected Payload Size: %v\n\n", expected_output_size);
 
-	if expected_output_size > 0 && expected_output_size <= compress.COMPRESS_OUTPUT_ALLOCATE_MAX {
+	if expected_output_size > 0 {
 		/*
 			Try to pre-allocate the output buffer.
 		*/
@@ -547,10 +578,12 @@ inflate_raw :: proc(z: ^$C, expected_output_size := -1, allocator := context.all
 				TODO: Maybe speed this up with a stream-to-stream copy (read_from)
 				and a single Adler32 update after.
 			*/
-			#no_bounds_check for uncompressed_len > 0 {
+			for uncompressed_len > 0 {
 				compress.refill_lsb(z)
 				lit := compress.read_bits_lsb(z, 8)
-				write_byte(z, u8(lit))
+				if write_byte(z, u8(lit)) != .None {
+					return .Output_Too_Short
+				}
 				uncompressed_len -= 1
 			}
 			assert(uncompressed_len == 0)

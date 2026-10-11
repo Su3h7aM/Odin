@@ -12,10 +12,12 @@ package test_core_compress
 
 import "core:testing"
 
+import "core:compress"
 import "core:compress/zlib"
 import "core:compress/gzip"
 import "core:compress/shoco"
 import "core:bytes"
+import "core:hash"
 
 @test
 zlib_test :: proc(t: ^testing.T) {
@@ -124,4 +126,168 @@ shoco_test :: proc(t: ^testing.T) {
 		size, err = shoco.decompress(v.compressed[:v.short_sentinel], buffer[:])
 		testing.expectf(t, err == .Stream_Too_Short, "No more data after non-ASCII sentinel returned %v, expected `.Stream_Too_Short`", err)
 	}
+}
+
+// Only the helper-level limit tests can run against the default multi-gigabyte
+// COMPRESS_OUTPUT_ALLOCATE_MAX. The tests that allocate up to the maximum skip
+// unless the limit was lowered (e.g. -define:COMPRESS_OUTPUT_ALLOCATE_MAX=65536).
+ZLIB_LIMIT_TEST_THRESHOLD :: 1 << 20
+
+make_stored_zlib_stream :: proc(payload: []u8, allocator := context.allocator) -> []u8 {
+	context.allocator = allocator
+	out: [dynamic]u8
+	append(&out, 0x78, 0x01)
+	offset := 0
+	for offset < len(payload) {
+		chunk := min(65535, len(payload) - offset)
+		if offset + chunk == len(payload) {
+			append(&out, u8(1))
+		} else {
+			append(&out, u8(0))
+		}
+		append(&out, u8(chunk & 0xff), u8(chunk >> 8))
+		nlen := ~u16(chunk)
+		append(&out, u8(nlen & 0xff), u8(nlen >> 8))
+		append(&out, ..payload[offset:][:chunk])
+		offset += chunk
+	}
+	adler := hash.adler32(payload)
+	append(&out, u8(adler >> 24), u8(adler >> 16), u8(adler >> 8), u8(adler))
+	return out[:]
+}
+
+@test
+zlib_grow_buffer_test :: proc(t: ^testing.T) {
+	buf: [dynamic]u8
+	defer delete(buf)
+
+	err := zlib.grow_buffer(&buf, 300)
+	testing.expect(t, err == nil, "grow_buffer failed to grow an empty buffer")
+	testing.expect(t, len(buf) >= 300, "grow_buffer did not cover `needed` from an empty buffer")
+
+	_ = resize(&buf, 1)
+	err = zlib.grow_buffer(&buf, 300)
+	testing.expect(t, err == nil, "grow_buffer failed to grow a tiny buffer")
+	testing.expect(t, len(buf) >= 300, "grow_buffer did not cover `needed` from a tiny buffer")
+
+	before := len(buf)
+	err = zlib.grow_buffer(&buf, compress.COMPRESS_OUTPUT_ALLOCATE_MAX + 1)
+	testing.expect(t, err != nil, "grow_buffer should fail when `needed` exceeds COMPRESS_OUTPUT_ALLOCATE_MAX")
+	testing.expect(t, len(buf) == before, "failed grow_buffer must not resize the buffer")
+}
+
+@test
+zlib_tiny_buffer_backreference_test :: proc(t: ^testing.T) {
+	buf: bytes.Buffer
+	defer bytes.buffer_destroy(&buf)
+
+	z := compress.Context_Memory_Input{output = &buf}
+
+	testing.expect(t, zlib.write_byte(&z, 'A') == .None, "write_byte failed on an empty buffer")
+	testing.expect(t, zlib.write_byte(&z, 'B') == .None, "write_byte failed on a tiny buffer")
+	testing.expect(t, zlib.repl_bytes(&z, 6, 2) == .None, "repl_bytes failed on a tiny buffer")
+	testing.expect(t, string(bytes.buffer_to_bytes(&buf)) == "ABABABAB", "backreference copy produced wrong bytes")
+
+	// One call must grow enough for the whole run, not just one doubling.
+	testing.expect(t, zlib.repl_byte(&z, 200, 'X') == .None, "repl_byte failed to grow a tiny buffer for the full count")
+	testing.expect(t, z.bytes_written == 208, "tiny buffer writes tracked the wrong length")
+	testing.expect(t, len(buf.buf) >= 208, "tiny buffer growth did not cover all writes")
+	got := bytes.buffer_to_bytes(&buf)
+	testing.expect(t, string(got[:8]) == "ABABABAB", "growth clobbered the backreference bytes")
+	for b in got[8:] {
+		testing.expect(t, b == 'X', "repl_byte wrote wrong bytes after growth")
+	}
+}
+
+@test
+zlib_stored_output_exact_limit_test :: proc(t: ^testing.T) {
+	if compress.COMPRESS_OUTPUT_ALLOCATE_MAX > ZLIB_LIMIT_TEST_THRESHOLD {
+		return
+	}
+	payload := make([]u8, compress.COMPRESS_OUTPUT_ALLOCATE_MAX)
+	defer delete(payload)
+	for _, i in payload {
+		payload[i] = u8(i & 0xff)
+	}
+	stream := make_stored_zlib_stream(payload)
+	defer delete(stream)
+
+	buf: bytes.Buffer
+	defer bytes.buffer_destroy(&buf)
+	err := zlib.inflate(stream, &buf)
+	testing.expect(t, err == nil, "inflate failed at exactly COMPRESS_OUTPUT_ALLOCATE_MAX bytes")
+	testing.expect(t, bytes.buffer_length(&buf) == len(payload), "exact-limit output has the wrong length")
+	got := bytes.buffer_to_bytes(&buf)
+	testing.expect(t, len(got) == len(payload), "exact-limit output slice has the wrong length")
+	for _, i in payload {
+		if got[i] != payload[i] {
+			testing.expectf(t, false, "exact-limit output differs at byte %v", i)
+			break
+		}
+	}
+}
+
+@test
+zlib_stored_output_over_limit_test :: proc(t: ^testing.T) {
+	if compress.COMPRESS_OUTPUT_ALLOCATE_MAX > ZLIB_LIMIT_TEST_THRESHOLD {
+		return
+	}
+	payload := make([]u8, compress.COMPRESS_OUTPUT_ALLOCATE_MAX + 1)
+	defer delete(payload)
+	for _, i in payload {
+		payload[i] = u8(i & 0xff)
+	}
+	stream := make_stored_zlib_stream(payload)
+	defer delete(stream)
+
+	buf: bytes.Buffer
+	defer bytes.buffer_destroy(&buf)
+	err := zlib.inflate(stream, &buf)
+	testing.expect(t, err != nil, "inflate should fail when output exceeds COMPRESS_OUTPUT_ALLOCATE_MAX")
+	testing.expect(t, err == compress.General_Error.Output_Too_Short, "over-limit inflate returned the wrong error")
+	testing.expect(t, bytes.buffer_length(&buf) <= compress.COMPRESS_OUTPUT_ALLOCATE_MAX, "over-limit inflate grew past the maximum")
+	testing.expect(t, len(buf.buf) <= compress.COMPRESS_OUTPUT_ALLOCATE_MAX, "over-limit inflate allocated past the maximum")
+}
+
+@test
+zlib_writers_refuse_past_limit_test :: proc(t: ^testing.T) {
+	if compress.COMPRESS_OUTPUT_ALLOCATE_MAX > ZLIB_LIMIT_TEST_THRESHOLD {
+		return
+	}
+	buf: bytes.Buffer
+	defer bytes.buffer_destroy(&buf)
+	z := compress.Context_Memory_Input{output = &buf}
+	_ = resize(&z.output.buf, compress.COMPRESS_OUTPUT_ALLOCATE_MAX)
+	z.output.buf[0] = 'A'
+	z.output.buf[1] = 'B'
+	z.bytes_written = i64(compress.COMPRESS_OUTPUT_ALLOCATE_MAX)
+
+	testing.expect(t, zlib.write_byte(&z, 'C') != .None, "write_byte must fail at the limit")
+	testing.expect(t, zlib.repl_byte(&z, 1, 'C') != .None, "repl_byte must fail at the limit")
+	testing.expect(t, zlib.repl_bytes(&z, 1, 1) != .None, "repl_bytes must fail at the limit")
+	testing.expect(t, z.bytes_written == i64(compress.COMPRESS_OUTPUT_ALLOCATE_MAX), "failed writes must not advance")
+	testing.expect(t, len(z.output.buf) == compress.COMPRESS_OUTPUT_ALLOCATE_MAX, "failed writes must not grow past the limit")
+}
+
+@test
+zlib_initial_allocation_clamp_test :: proc(t: ^testing.T) {
+	// Runs against every limit configuration, including the default
+	// COMPRESS_OUTPUT_ALLOCATE_MIN (1 MiB) greater than a reduced
+	// COMPRESS_OUTPUT_ALLOCATE_MAX (e.g. 65536). A valid short stream must
+	// inflate without an explicit expectation, while an explicitly oversized
+	// expectation is rejected.
+	payload := transmute([]u8)string("clamp-regression-payload")
+	stream := make_stored_zlib_stream(payload)
+	defer delete(stream)
+
+	buf: bytes.Buffer
+	defer bytes.buffer_destroy(&buf)
+	err := zlib.inflate(stream, &buf)
+	testing.expect(t, err == nil, "inflate failed on a valid short stream")
+	testing.expect(t, string(bytes.buffer_to_bytes(&buf)) == string(payload), "short stream inflated to the wrong bytes")
+
+	oversized: bytes.Buffer
+	defer bytes.buffer_destroy(&oversized)
+	err = zlib.inflate(stream, &oversized, expected_output_size = compress.COMPRESS_OUTPUT_ALLOCATE_MAX + 1)
+	testing.expect(t, err == compress.General_Error.Output_Too_Short, "oversized expected_output_size returned the wrong error")
 }
