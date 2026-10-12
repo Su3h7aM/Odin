@@ -1,4 +1,4 @@
-#+build linux, darwin, netbsd, freebsd, openbsd
+#+build darwin, netbsd, freebsd, openbsd
 package mem
 
 import "core:sys/posix"

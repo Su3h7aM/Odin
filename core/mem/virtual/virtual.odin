@@ -2,7 +2,7 @@ package mem_virtual
 
 import "core:mem"
 import "base:intrinsics"
-// import "base:sanitizer"
+import "base:sanitizer"
 import "base:runtime"
 _ :: runtime
 
@@ -15,7 +15,10 @@ reserve :: proc "contextless" (size: uint, address_hint := uintptr(0)) -> (data:
 
 @(no_sanitize_address)
 commit :: proc "contextless" (data: rawptr, size: uint) -> Allocator_Error {
-	// sanitizer.address_unpoison(data, size)
+	// Memory becomes usable here, so it must be unpoisoned here. Raw
+	// syscalls bypass asan's interceptors, which would otherwise do this
+	// for mappings that recycle poisoned addresses.
+	sanitizer.address_unpoison(data, size)
 	return _commit(data, size)
 }
 
@@ -28,13 +31,19 @@ reserve_and_commit :: proc "contextless" (size: uint) -> (data: []byte, err: All
 
 @(no_sanitize_address)
 decommit :: proc "contextless" (data: rawptr, size: uint) {
-	// sanitizer.address_poison(data, size)
+	// The mapping is retained but its contents are gone; poison until
+	// the next commit so stray accesses report instead of silently
+	// reading fresh zero pages.
+	sanitizer.address_poison(data, size)
 	_decommit(data, size)
 }
 
 @(no_sanitize_address)
 release :: proc "contextless" (data: rawptr, size: uint) {
-	// sanitizer.address_unpoison(data, size)
+	// The mapping goes back to the OS, so leave no poison behind: the
+	// next mapper may not unpoison, and any access past this point faults
+	// on the unmapped range regardless of shadow state.
+	sanitizer.address_unpoison(data, size)
 	_release(data, size)
 }
 

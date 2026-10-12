@@ -723,7 +723,8 @@ gb_internal bool escape_type_is_plain(Type *t) {
 	case Type_Proc:
 		return true;
 	}
-	return false;
+	// e.g. a struct, array or union of such types, like a 'Maybe(int)'
+	return !escape_type_has_pointers(t);
 }
 
 gb_internal bool escape_is_local(Entity *e) {

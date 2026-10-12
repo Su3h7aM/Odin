@@ -5,14 +5,17 @@ import "base:intrinsics"
 
 VIRTUAL_MEMORY_SUPPORTED :: true
 
-SYS_munmap :: uintptr(73)
-SYS_mremap :: uintptr(411)
+SYS_madvise :: uintptr(75)
+SYS_munmap  :: uintptr(73)
+SYS_mremap  :: uintptr(411)
 
 PROT_READ   :: 0x01
 PROT_WRITE  :: 0x02
 
 MAP_PRIVATE   :: 0x0002
 MAP_ANONYMOUS :: 0x1000
+
+MADV_DONTNEED :: 4
 
 // The following features are specific to NetBSD only.
 /*
@@ -71,6 +74,25 @@ _allocate_virtual_memory_aligned :: proc "contextless" (size: int, alignment: in
 
 _free_virtual_memory :: proc "contextless" (ptr: rawptr, size: int) {
 	intrinsics.syscall_bsd(SYS_munmap, uintptr(ptr), uintptr(size))
+}
+
+_decommit_virtual_memory :: proc "contextless" (ptr: rawptr, size: int) -> (decommitted: bool) {
+	// This advice does not guarantee zero-filled contents on subsequent access.
+	// The caller must clear the range itself.
+	intrinsics.syscall_bsd(SYS_madvise, uintptr(ptr), uintptr(size), MADV_DONTNEED)
+	return false
+}
+
+_protect_virtual_memory :: proc "contextless" (ptr: rawptr, size: int) -> (protected: bool) {
+	// Not yet supported on this platform. The caller treats protection as a
+	// hint, so the memory simply stays accessible.
+	return false
+}
+
+_resize_virtual_memory_in_place :: proc "contextless" (ptr: rawptr, old_size: int, new_size: int) -> (resized: bool) {
+	// There is no request for extending a mapping where it is, so callers copy
+	// into a fresh one instead. NetBSD has `mremap`, which would serve here.
+	return false
 }
 
 _resize_virtual_memory :: proc "contextless" (ptr: rawptr, old_size: int, new_size: int, alignment: int) -> rawptr {

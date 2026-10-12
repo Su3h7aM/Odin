@@ -39,6 +39,7 @@ foreign lib {
 		max_protection: ^i32,
 		inheritance:    u32,
 	) -> i32 ---
+	madvise :: proc(addr: rawptr, size: uint, advice: i32) -> i32 ---
 }
 
 // The following features are specific to Darwin only.
@@ -55,6 +56,10 @@ MEMORY_OBJECT_NULL :: 0
 VM_PROT_READ  :: 0x01
 VM_PROT_WRITE :: 0x02
 VM_INHERIT_COPY :: 1
+
+// The Darwin advice which returns pages to the system, keeping the address
+// range intact and accounting for the change in the resident set size at once.
+MADV_FREE_REUSABLE :: 7
 
 _init_virtual_memory :: proc "contextless" () {
 	page_size = _get_page_size()
@@ -109,6 +114,25 @@ _allocate_virtual_memory_aligned :: proc "contextless" (size: int, alignment: in
 
 _free_virtual_memory :: proc "contextless" (ptr: rawptr, size: int) {
 	mach_vm_deallocate(mach_task_self_, u64(uintptr(ptr)), u64(size))
+}
+
+_decommit_virtual_memory :: proc "contextless" (ptr: rawptr, size: int) -> (decommitted: bool) {
+	// This advice makes the range reusable, but does not guarantee zero-filled
+	// contents on subsequent access. The caller must clear the range itself.
+	madvise(ptr, uint(size), MADV_FREE_REUSABLE)
+	return false
+}
+
+_protect_virtual_memory :: proc "contextless" (ptr: rawptr, size: int) -> (protected: bool) {
+	// Not yet supported on this platform. The caller treats protection as a
+	// hint, so the memory simply stays accessible.
+	return false
+}
+
+_resize_virtual_memory_in_place :: proc "contextless" (ptr: rawptr, old_size: int, new_size: int) -> (resized: bool) {
+	// There is no request for extending a mapping where it is, so callers copy
+	// into a fresh one instead.
+	return false
 }
 
 _resize_virtual_memory :: proc "contextless" (ptr: rawptr, old_size: int, new_size: int, alignment: int) -> rawptr {

@@ -3,6 +3,7 @@
 package mem_virtual
 
 import "core:sys/linux"
+import "base:sanitizer"
 
 _reserve :: proc "contextless" (size: uint, address_hint: uintptr) -> (data: []byte, err: Allocator_Error) {
 	addr, errno := linux.mmap(address_hint, size, {}, {.PRIVATE, .ANONYMOUS})
@@ -11,6 +12,11 @@ _reserve :: proc "contextless" (size: uint, address_hint: uintptr) -> (data: []b
 	} else if errno == .EINVAL {
 		return nil, .Invalid_Argument
 	}
+	// Raw syscalls bypass tsan's mmap interceptor, so its shadow still
+	// attributes this range to whichever thread last owned the recycled
+	// address. Pair release/acquire across reserve/release so the new
+	// occupant happens-after the previous one.
+	sanitizer.thread_acquire(addr)
 	return (cast([^]byte)addr)[:size], nil
 }
 
@@ -30,6 +36,9 @@ _decommit :: proc "contextless" (data: rawptr, size: uint) {
 }
 
 _release :: proc "contextless" (data: rawptr, size: uint) {
+	// Publish this thread's clock before the mapping goes back, paired
+	// with the acquire in `_reserve`. See the note there.
+	sanitizer.thread_release(data)
 	_ = linux.munmap(data, size)
 }
 
@@ -57,6 +66,7 @@ _map_file :: proc "contextless" (fd: uintptr, size: i64, flags: Map_File_Flags) 
 	if addr == nil || errno != nil {
 		return nil, .Map_Failure
 	}
+	sanitizer.thread_acquire(addr)
 	return ([^]byte)(addr)[:size], nil
 }
 
