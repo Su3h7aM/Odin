@@ -163,8 +163,8 @@ putchar   :: libc.putchar
 puts      :: libc.puts
 when ODIN_OS != .Linux {
 	remove :: libc.remove
+	rename :: libc.rename
 }
-rename    :: libc.rename
 rewind    :: libc.rewind
 scanf     :: libc.scanf
 setbuf    :: libc.setbuf

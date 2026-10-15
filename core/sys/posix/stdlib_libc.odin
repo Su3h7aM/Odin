@@ -56,7 +56,11 @@ abort         :: libc.abort
 atexit        :: libc.atexit
 at_quick_exit :: libc.at_quick_exit
 exit          :: libc.exit
-_Exit         :: libc._Exit
+when ODIN_OS == .Linux {
+	_Exit :: _exit
+} else {
+	_Exit :: libc._Exit
+}
 when ODIN_OS != .Linux || !ODIN_NO_CRT {
 	getenv :: libc.getenv
 }

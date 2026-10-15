@@ -22,27 +22,31 @@ foreign lib {
 	if_nameindex :: proc() -> [^]if_nameindex_t ---
 
 	/*
-	Returns the interface index matching the name or zero.
-
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/if_nametoindex.html ]]
-	*/
-	if_nametoindex :: proc(name: cstring) -> c.uint ---
-
-	/*
-	Returns the name corresponding to the index.
-
-	ifname should be at least IF_NAMESIZE bytes in size.
-
-	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/if_indextoname.html ]]
-	*/
-	if_indextoname :: proc(ifindex: c.uint, ifname: [^]byte) -> cstring ---
-
-	/*
 	Frees memory allocated by if_nameindex.
 
 	[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/if_freenameindex.html ]]
 	*/
 	if_freenameindex :: proc(ptr: ^if_nameindex_t) ---
+}
+
+when ODIN_OS != .Linux {
+	foreign lib {
+		/*
+		Returns the interface index matching the name or zero.
+
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/if_nametoindex.html ]]
+		*/
+		if_nametoindex :: proc(name: cstring) -> c.uint ---
+
+		/*
+		Returns the name corresponding to the index.
+
+		ifname should be at least IF_NAMESIZE bytes in size.
+
+		[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/if_indextoname.html ]]
+		*/
+		if_indextoname :: proc(ifindex: c.uint, ifname: [^]byte) -> cstring ---
+	}
 }
 
 when ODIN_OS == .Darwin || ODIN_OS == .FreeBSD || ODIN_OS == .NetBSD || ODIN_OS == .OpenBSD || ODIN_OS == .Linux {

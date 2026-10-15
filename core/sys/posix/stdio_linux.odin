@@ -8,6 +8,17 @@ import "core:sys/linux"
 // system calls, without libc.
 
 /*
+Renames a file or directory.
+
+Returns: 0 on success, -1 (setting errno) on failure
+
+[[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/rename.html ]]
+*/
+rename :: proc "c" (old, new: cstring) -> c.int {
+	return c.int(errno_result(linux.renameat(linux.AT_FDCWD, old, linux.AT_FDCWD, new)))
+}
+
+/*
 Equivalent to rename but relative directories are resolved from their respective fds.
 
 [[ More; https://pubs.opengroup.org/onlinepubs/9699919799/functions/renameat.html ]]

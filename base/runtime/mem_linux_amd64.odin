@@ -8,6 +8,12 @@ import "base:intrinsics"
 // the noCRT case on this target, with identical link names and signatures
 // (int is int_t here).
 when ODIN_NO_CRT {
+	// LLVM can replace byte-scanning loops with a call to strlen.
+	@(link_name="strlen", linkage="strong", require)
+	strlen :: proc "c" (s: cstring) -> uintptr {
+		return uintptr(cstring_len(s))
+	}
+
 	// Large-fill helper as a language-level asm template, so this target needs
 	// no standalone assembly file or assembler invocation for it. The emitted
 	// object comes from LLVM codegen and carries the executable-stack marking
