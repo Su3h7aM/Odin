@@ -3,7 +3,7 @@ package runtime
 
 import "base:intrinsics"
 
-// Copy kernels are shared by compiler-generated moves in both profiles.
+// Memory kernels are shared by compiler-generated operations in both profiles.
 // Standard C-name providers remain exclusive to noCRT.
 when ODIN_NO_CRT {
 	// LLVM can replace byte-scanning loops with a call to strlen.
@@ -12,64 +12,9 @@ when ODIN_NO_CRT {
 		return uintptr(cstring_len(s))
 	}
 
-	// Large-fill helper as a language-level asm template, so this target needs
-	// no standalone assembly file or assembler invocation for it. The emitted
-	// object comes from LLVM codegen and carries the executable-stack marking
-	// centrally. Effects are explicit: volatile with a memory clobber, fixed
-	// rdi/rcx/rax use, DF cleared before rep stosb and left clear.
-	@(private="file")
-	_rep_memset :: asm(dst: rawptr, val: u8, len: int) -> (r: rawptr) [#volatile, #clobber memory] {
-		mov r, dst
-		mov %rdi, dst
-		movzx %rax, val
-		mov %rcx, len
-		cld
-		rep
-		stosb
-	}
-
-	// Below 1024 bytes memset uses unaligned 16-byte stores on the amd64
-	// SSE2 baseline; at and above 1024 it uses rep stosb.
-	// Single stream, so the rep-copy aliasing hazard does not apply.
-	//
-	// The sub-1024 stores live in the helper because the C entry below is
-	// built without optimization; force_no_inline keeps the hot stores in the
-	// optimized helper body instead of the entry.
-	@(private="file")
-	_small_memset :: #force_no_inline proc "contextless" (ptr: rawptr, b: byte, len: int) {
-		v: #simd[16]u8 = b
-		p := ([^]byte)(ptr)
-		n := len
-		for n >= 64 {
-			intrinsics.unaligned_store(cast(^#simd[16]u8)p, v)
-			intrinsics.unaligned_store(cast(^#simd[16]u8)(uintptr(p) + 16), v)
-			intrinsics.unaligned_store(cast(^#simd[16]u8)(uintptr(p) + 32), v)
-			intrinsics.unaligned_store(cast(^#simd[16]u8)(uintptr(p) + 48), v)
-			p = ([^]byte)(uintptr(p) + 64)
-			n -= 64
-		}
-		for n >= 16 {
-			intrinsics.unaligned_store(cast(^#simd[16]u8)p, v)
-			p = ([^]byte)(uintptr(p) + 16)
-			n -= 16
-		}
-		for n > 0 {
-			p[0] = b
-			p = ([^]byte)(uintptr(p) + 1)
-			n -= 1
-		}
-	}
-
 	@(link_name="memset", linkage="strong", require)
 	memset :: proc "c" (ptr: rawptr, val: i32, #any_int len: int) -> rawptr {
-		if ptr == nil || len <= 0 {
-			return ptr
-		}
-		if len >= 1024 {
-			return _rep_memset(ptr, u8(val), len)
-		}
-		_small_memset(ptr, byte(val), len)
-		return ptr
+		return native_memset(ptr, u8(val), len)
 	}
 
 	@(link_name="bzero", linkage="strong", require)
@@ -92,6 +37,60 @@ when ODIN_NO_CRT {
 	memcpy :: proc "c" (dst, src: rawptr, #any_int len: int) -> rawptr {
 		return native_memcpy(dst, src, len)
 	}
+}
+
+// Large-fill helper as a language-level asm template, so this target needs
+// no standalone assembly file or assembler invocation for it. The emitted
+// object comes from LLVM codegen and carries the executable-stack marking
+// centrally. Effects are explicit: volatile with a memory clobber, fixed
+// rdi/rcx/rax use, DF cleared before rep stosb and left clear.
+@(private="file")
+_rep_memset :: asm(dst: rawptr, val: u8, len: int) -> (r: rawptr) [#volatile, #clobber memory] {
+	mov r, dst
+	mov %rdi, dst
+	movzx %rax, val
+	mov %rcx, len
+	cld
+	rep
+	stosb
+}
+
+// Small fills use SSE2 stores; large fills use rep stosb.
+@(private, optimization_mode="none")
+native_memset_small :: proc "contextless" (ptr: rawptr, b: byte, len: int) {
+	v: #simd[16]u8 = b
+	p := ([^]byte)(ptr)
+	n := len
+	for n >= 64 {
+		intrinsics.unaligned_store(cast(^#simd[16]u8)p, v)
+		intrinsics.unaligned_store(cast(^#simd[16]u8)(uintptr(p) + 16), v)
+		intrinsics.unaligned_store(cast(^#simd[16]u8)(uintptr(p) + 32), v)
+		intrinsics.unaligned_store(cast(^#simd[16]u8)(uintptr(p) + 48), v)
+		p = ([^]byte)(uintptr(p) + 64)
+		n -= 64
+	}
+	for n >= 16 {
+		intrinsics.unaligned_store(cast(^#simd[16]u8)p, v)
+		p = ([^]byte)(uintptr(p) + 16)
+		n -= 16
+	}
+	for n > 0 {
+		p[0] = b
+		p = ([^]byte)(uintptr(p) + 1)
+		n -= 1
+	}
+}
+
+@(private, require, optimization_mode="none")
+native_memset :: proc "contextless" (ptr: rawptr, val: u8, len: int) -> rawptr {
+	if ptr == nil || len <= 0 {
+		return ptr
+	}
+	if len >= 1024 {
+		return _rep_memset(ptr, u8(val), len)
+	}
+	native_memset_small(ptr, byte(val), len)
+	return ptr
 }
 
 @(private, require, optimization_mode="none")
@@ -143,7 +142,7 @@ native_memmove :: proc "contextless" (dst, src: rawptr, len: int) -> rawptr {
 // chunks held ~20 GB/s in every size/offset/layout measured. The
 // destination is aligned with head bytes; the source is read with
 // explicit unaligned loads. Forward overlap is safe ascending.
-@(private="file", optimization_mode="none")
+@(private, require, optimization_mode="none")
 native_memcpy :: proc "contextless" (dst, src: rawptr, len: int) -> rawptr {
 	d, s := ([^]byte)(dst), ([^]byte)(src)
 	if d == s || len <= 0 {
@@ -180,6 +179,34 @@ native_memcpy :: proc "contextless" (dst, src: rawptr, len: int) -> rawptr {
 		d = ([^]byte)(uintptr(d) + 1)
 		s = ([^]byte)(uintptr(s) + 1)
 		n -= 1
+	}
+	return dst
+}
+
+@(private, require, optimization_mode="none")
+native_memmove_volatile :: proc "contextless" (dst, src: rawptr, len: int) -> rawptr {
+	d, s := ([^]byte)(dst), ([^]byte)(src)
+	if len <= 0 {
+		return dst
+	}
+	if uintptr(d) > uintptr(s) && uintptr(d)-uintptr(s) < uintptr(len) {
+		for i := len; i > 0; {
+			i -= 1
+			intrinsics.volatile_store(&d[i], intrinsics.volatile_load(&s[i]))
+		}
+	} else {
+		for i := 0; i < len; i += 1 {
+			intrinsics.volatile_store(&d[i], intrinsics.volatile_load(&s[i]))
+		}
+	}
+	return dst
+}
+
+@(private, require, optimization_mode="none")
+native_memset_volatile :: proc "contextless" (dst: rawptr, val: u8, len: int) -> rawptr {
+	d := ([^]byte)(dst)
+	for i := 0; i < len; i += 1 {
+		intrinsics.volatile_store(&d[i], val)
 	}
 	return dst
 }

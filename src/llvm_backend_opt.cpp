@@ -841,6 +841,9 @@ gb_internal void lb_redirect_unselectable_call(lbFastIselLowering *s, LLVMValueR
 
 	LLVMValueRef inner = LLVMBuildCall2(s->builder, fn_type, callee, params, param_count, "");
 	LLVMSetInstructionCallConv(inner, cc);
+	if (is_memmove && lb_native_memory_lowering_enabled()) {
+		LLVMAddCallSiteAttribute(inner, LLVMAttributeFunctionIndex, lb_create_enum_attribute(m->ctx, "nobuiltin", 0));
+	}
 	LLVMBuildRet(s->builder, inner);
 }
 
@@ -1037,6 +1040,155 @@ gb_internal void lb_lower_small_switch(lbFastIselLowering *s, LLVMValueRef sw) {
 			phi = next;
 		}
 	}
+}
+
+gb_internal bool lb_lower_native_memory(lbModule *m) {
+	if (!lb_native_memory_lowering_enabled()) {
+		return true;
+	}
+
+	enum {Copy, Move, Fill, VolatileMove, VolatileFill, SmallFill, ProviderCount};
+	char const *names[ProviderCount] = {
+		"native_memcpy", "native_memmove", "native_memset",
+		"native_memmove_volatile", "native_memset_volatile", "native_memset_small",
+	};
+	LLVMValueRef providers[ProviderCount] = {};
+	for (unsigned i = 0; i < ProviderCount; i++) {
+		providers[i] = lb_lookup_runtime_procedure(m, make_string_c(names[i])).value;
+	}
+
+	unsigned copy_id = LLVMLookupIntrinsicID("llvm.memcpy", gb_strlen("llvm.memcpy"));
+	unsigned move_id = LLVMLookupIntrinsicID("llvm.memmove", gb_strlen("llvm.memmove"));
+	unsigned fill_id = LLVMLookupIntrinsicID("llvm.memset", gb_strlen("llvm.memset"));
+	unsigned inline_copy_id = LLVMLookupIntrinsicID("llvm.memcpy.inline", gb_strlen("llvm.memcpy.inline"));
+	unsigned inline_move_id = LLVMLookupIntrinsicID("llvm.memmove.inline", gb_strlen("llvm.memmove.inline"));
+	unsigned align_id = LLVMGetEnumAttributeKindForName("align", gb_strlen("align"));
+
+	LLVMBuilderRef builder = LLVMCreateBuilderInContext(m->ctx);
+	defer (LLVMDisposeBuilder(builder));
+	auto work = array_make<LLVMValueRef>(heap_allocator(), 0, 32);
+	defer (array_free(&work));
+
+	for (LLVMValueRef fn = LLVMGetFirstFunction(m->mod); fn != nullptr; fn = LLVMGetNextFunction(fn)) {
+		bool provider_body = false;
+		for (LLVMValueRef provider : providers) {
+			provider_body |= provider == fn;
+		}
+		array_clear(&work);
+		for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(fn); bb != nullptr; bb = LLVMGetNextBasicBlock(bb)) {
+			for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst != nullptr; inst = LLVMGetNextInstruction(inst)) {
+				if (!LLVMIsACallInst(inst)) {
+					continue;
+				}
+				LLVMValueRef callee = LLVMGetCalledValue(inst);
+				if (!LLVMIsAFunction(callee)) {
+					continue;
+				}
+				unsigned id = LLVMGetIntrinsicID(callee);
+				if (id != 0 && (id == copy_id || id == move_id || id == fill_id)) {
+					array_add(&work, inst);
+				}
+			}
+		}
+
+		for (LLVMValueRef inst : work) {
+			unsigned id = LLVMGetIntrinsicID(LLVMGetCalledValue(inst));
+			bool fill = id == fill_id;
+			LLVMValueRef dst = LLVMGetOperand(inst, 0);
+			LLVMValueRef src_or_byte = LLVMGetOperand(inst, 1);
+			LLVMValueRef len = LLVMGetOperand(inst, 2);
+			LLVMValueRef volatile_arg = LLVMGetOperand(inst, 3);
+			bool is_volatile = LLVMConstIntGetZExtValue(volatile_arg) != 0;
+			if (LLVMGetPointerAddressSpace(LLVMTypeOf(dst)) != 0 ||
+			    (!fill && LLVMGetPointerAddressSpace(LLVMTypeOf(src_or_byte)) != 0)) {
+				gb_printf_err("Native Linux x64 memory lowering requires address space zero\n");
+				return false;
+			}
+
+			unsigned dst_align = 1, src_align = 1;
+			if (LLVMAttributeRef attr = LLVMGetCallSiteEnumAttribute(inst, 1, align_id)) {
+				dst_align = cast(unsigned)LLVMGetEnumAttributeValue(attr);
+			}
+			if (!fill) {
+				if (LLVMAttributeRef attr = LLVMGetCallSiteEnumAttribute(inst, 2, align_id)) {
+					src_align = cast(unsigned)LLVMGetEnumAttributeValue(attr);
+				}
+			}
+			LLVMPositionBuilderBefore(builder, inst);
+			LLVMSetCurrentDebugLocation2(builder, LLVMInstructionGetDebugLoc(inst));
+			u64 size = LLVMIsAConstantInt(len) ? LLVMConstIntGetZExtValue(len) : UINT64_MAX;
+			if (size == 0) {
+				LLVMInstructionEraseFromParent(inst);
+				continue;
+			}
+
+			if (!is_volatile && size <= 16) {
+				if (fill) {
+					for (u64 offset = 0; offset < size; /**/) {
+						u64 chunk = 8;
+						while (chunk > size-offset) {
+							chunk >>= 1;
+						}
+						LLVMTypeRef type = LLVMIntTypeInContext(m->ctx, cast(unsigned)(8*chunk));
+						u64 repeated_byte = 0;
+						for (u64 i = 0; i < chunk; i++) {
+							repeated_byte |= cast(u64)1 << (8*i);
+						}
+						LLVMValueRef byte = LLVMBuildIntCast2(builder, src_or_byte, type, false, "");
+						LLVMValueRef value = LLVMBuildMul(builder, byte, LLVMConstInt(type, repeated_byte, false), "");
+						LLVMValueRef index = LLVMConstInt(lb_type(m, t_int), offset, false);
+						LLVMValueRef ptr = LLVMBuildGEP2(builder, LLVMInt8TypeInContext(m->ctx), dst, &index, 1, "");
+						LLVMValueRef store = LLVMBuildStore(builder, value, ptr);
+						LLVMSetAlignment(store, lb_alignment_at_offset(dst_align, offset, chunk));
+						offset += chunk;
+					}
+				} else {
+					// Read the whole value before writing, including overlapping moves.
+					LLVMTypeRef type = LLVMIntTypeInContext(m->ctx, cast(unsigned)(8*size));
+					LLVMValueRef value = LLVMBuildLoad2(builder, type, src_or_byte, "");
+					LLVMSetAlignment(value, src_align);
+					LLVMValueRef store = LLVMBuildStore(builder, value, dst);
+					LLVMSetAlignment(store, dst_align);
+				}
+				LLVMInstructionEraseFromParent(inst);
+				continue;
+			}
+
+			unsigned inline_id = id == copy_id ? inline_copy_id : inline_move_id;
+			if (!is_volatile && !fill && size <= 64 && inline_id != 0) {
+				LLVMTypeRef types[3] = {LLVMTypeOf(dst), LLVMTypeOf(src_or_byte), LLVMTypeOf(len)};
+				LLVMValueRef callee = LLVMGetIntrinsicDeclaration(m->mod, inline_id, types, 3);
+				LLVMValueRef args[4] = {dst, src_or_byte, len, volatile_arg};
+				LLVMValueRef call = LLVMBuildCall2(builder, LLVMIntrinsicGetType(m->ctx, inline_id, types, 3), callee, args, 4, "");
+				for (unsigned index = 1; index <= 2; index++) {
+					if (LLVMAttributeRef attr = LLVMGetCallSiteEnumAttribute(inst, index, align_id)) {
+						LLVMAddCallSiteAttribute(call, index, attr);
+					}
+				}
+				LLVMInstructionEraseFromParent(inst);
+				continue;
+			}
+
+			// Never introduce a recursive provider call from a kernel body.
+			if (provider_body) {
+				gb_printf_err("Native Linux x64 memory provider contains a non-inline memory operation\n");
+				return false;
+			}
+			unsigned provider_index = fill ? (is_volatile ? VolatileFill : Fill) :
+			                          is_volatile ? VolatileMove : id == copy_id ? Copy : Move;
+			LLVMValueRef callee = providers[provider_index];
+			LLVMValueRef args[3] = {
+				LLVMBuildPointerCast(builder, dst, lb_type(m, t_rawptr), ""),
+				fill ? LLVMBuildIntCast2(builder, src_or_byte, LLVMInt8TypeInContext(m->ctx), false, "") :
+				       LLVMBuildPointerCast(builder, src_or_byte, lb_type(m, t_rawptr), ""),
+				LLVMBuildIntCast2(builder, len, lb_type(m, t_int), false, ""),
+			};
+			LLVMValueRef call = LLVMBuildCall2(builder, LLVMGlobalGetValueType(callee), callee, args, 3, "");
+			LLVMSetInstructionCallConv(call, LLVMGetFunctionCallConv(callee));
+			LLVMInstructionEraseFromParent(inst);
+		}
+	}
+	return true;
 }
 
 gb_internal void lb_lower_for_fast_isel(lbModule *m) {

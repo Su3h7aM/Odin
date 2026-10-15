@@ -564,6 +564,14 @@ gb_internal void    lb_add_defer_node(lbProcedure *p, isize scope_index, Ast *st
 gb_internal lbAddr lb_add_local_generated(lbProcedure *p, Type *type, bool zero_init);
 
 gb_internal lbValue lb_emit_runtime_call(lbProcedure *p, char const *c_name, Array<lbValue> const &args);
+gb_internal lbValue lb_lookup_runtime_procedure(lbModule *m, String const &name);
+gb_internal bool lb_lower_native_memory(lbModule *m);
+gb_internal unsigned lb_alignment_at_offset(unsigned alignment, i64 offset, i64 size);
+
+gb_internal gb_inline bool lb_native_memory_lowering_enabled(void) {
+	return build_context.metrics.os == TargetOs_linux && build_context.metrics.arch == TargetArch_amd64 &&
+	       build_context.sanitizer_flags == 0 && build_context.lto_kind == LTO_None;
+}
 
 
 gb_internal lbValue lb_emit_ptr_offset(lbProcedure *p, lbValue ptr, lbValue index);

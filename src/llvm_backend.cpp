@@ -3098,6 +3098,10 @@ gb_internal WORKER_TASK_PROC(lb_llvm_module_pass_worker_proc) {
 	if (lb_uses_fast_isel()) {
 		lb_lower_for_fast_isel(wd->m);
 	}
+	if (!lb_lower_native_memory(wd->m)) {
+		lb_record_worker_failure();
+		return 1;
+	}
 
 	if (LLVM_IGNORE_VERIFICATION) {
 		return 0;

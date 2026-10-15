@@ -1099,6 +1099,19 @@ gb_internal lbValue lb_emit_call_internal(lbProcedure *p, lbValue value, lbValue
 		}
 
 		LLVMValueRef ret = LLVMBuildCall2(p->builder, fnp, fn, args, arg_count, "");
+		if (lb_native_memory_lowering_enabled()) {
+			bool foreign_call = false;
+			if (LLVMIsAFunction(fn) && LLVMIsDeclaration(fn) && LLVMGetIntrinsicID(fn) == 0) {
+				// Other C calls, such as strcpy, can also fold into memory intrinsics.
+				foreign_call = true;
+			} else if (!LLVMIsAFunction(fn)) {
+				ProcCallingConvention cc = proc_type->Proc.calling_convention;
+				foreign_call = cc == ProcCC_CDecl || cc == ProcCC_SysV || cc == ProcCC_Win64;
+			}
+			if (foreign_call) {
+				LLVMAddCallSiteAttribute(ret, LLVMAttributeFunctionIndex, lb_create_enum_attribute(p->module->ctx, "nobuiltin", 0));
+			}
+		}
 
 		LLVMSetInstructionCallConv(ret, lb_calling_convention_kind(proc_type->Proc.calling_convention));
 
