@@ -3,10 +3,8 @@ package runtime
 
 import "base:intrinsics"
 
-// Memory primitives for Linux amd64 without the C runtime. Other targets
-// keep the shared byte-loop bodies in procs.odin; this file only takes over
-// the noCRT case on this target, with identical link names and signatures
-// (int is int_t here).
+// Copy kernels are shared by compiler-generated moves in both profiles.
+// Standard C-name providers remain exclusive to noCRT.
 when ODIN_NO_CRT {
 	// LLVM can replace byte-scanning loops with a call to strlen.
 	@(link_name="strlen", linkage="strong", require)
@@ -87,91 +85,101 @@ when ODIN_NO_CRT {
 
 	@(link_name="memmove", linkage="strong", require)
 	memmove :: proc "c" (dst, src: rawptr, #any_int len: int) -> rawptr {
-		d, s := ([^]byte)(dst), ([^]byte)(src)
-		if d == s || len == 0 {
-			return dst
-		}
-		if d > s && uintptr(d)-uintptr(s) < uintptr(len) {
-			// Backward copy for overlap. Three strictly descending phases
-			// tile [dst, dst+len) exactly: top fragment bytes down to the
-			// first u64-aligned boundary, whole u64 blocks, then bottom
-			// fragment bytes. Block sources use explicit unaligned loads
-			// so differing src/dst offsets stay valid, and each block is
-			// fully loaded before it is stored, which is what makes
-			// descending block order overlap-safe. The u64 loop only runs
-			// while at least 8 bytes remain, so every access stays inside
-			// its region.
-			gap := uintptr(d) - uintptr(s)
-			adw := (uintptr(d) + uintptr(len)) & ~uintptr(7)
-			j := len
-			for j > 0 && uintptr(d) + uintptr(j) > adw {
-				j -= 1
-				d[j] = s[j]
-			}
-			for j >= 8 {
-				adw -= 8
-				dw := ([^]u64)(adw)
-				sw := ([^]u64)(adw - gap)
-				dw[0] = intrinsics.unaligned_load(&sw[0])
-				j -= 8
-			}
-			for j > 0 {
-				j -= 1
-				d[j] = s[j]
-			}
-			return dst
-		}
-
-		if s > d && uintptr(s)-uintptr(d) < uintptr(len) {
-			// Forward overlap copies ascending, which is what memcpy does.
-			return memcpy(dst, src, len)
-		}
-		return memcpy(dst, src, len)
+		return native_memmove(dst, src, len)
 	}
 
-	// No rep movsb: the prototype matrix showed order-of-magnitude
-	// layout-dependent cliffs for it on the primary target, while 8-byte
-	// chunks held ~20 GB/s in every size/offset/layout measured. The
-	// destination is aligned with head bytes; the source is read with
-	// explicit unaligned loads. Forward overlap is safe ascending.
 	@(link_name="memcpy", linkage="strong", require)
 	memcpy :: proc "c" (dst, src: rawptr, #any_int len: int) -> rawptr {
-		d, s := ([^]byte)(dst), ([^]byte)(src)
-		if d == s || len <= 0 {
-			return dst
+		return native_memcpy(dst, src, len)
+	}
+}
+
+@(private, require, optimization_mode="none")
+native_memmove :: proc "contextless" (dst, src: rawptr, len: int) -> rawptr {
+	d, s := ([^]byte)(dst), ([^]byte)(src)
+	if d == s || len == 0 {
+		return dst
+	}
+	if d > s && uintptr(d)-uintptr(s) < uintptr(len) {
+		// Backward copy for overlap. Three strictly descending phases
+		// tile [dst, dst+len) exactly: top fragment bytes down to the
+		// first u64-aligned boundary, whole u64 blocks, then bottom
+		// fragment bytes. Block sources use explicit unaligned loads
+		// so differing src/dst offsets stay valid, and each block is
+		// fully loaded before it is stored, which is what makes
+		// descending block order overlap-safe. The u64 loop only runs
+		// while at least 8 bytes remain, so every access stays inside
+		// its region.
+		gap := uintptr(d) - uintptr(s)
+		adw := (uintptr(d) + uintptr(len)) & ~uintptr(7)
+		j := len
+		for j > 0 && uintptr(d) + uintptr(j) > adw {
+			j -= 1
+			d[j] = s[j]
 		}
-		n := len
-		for n > 0 && uintptr(d) & 7 != 0 {
-			d[0] = s[0]
-			d = ([^]byte)(uintptr(d) + 1)
-			s = ([^]byte)(uintptr(s) + 1)
-			n -= 1
-		}
-		dw := ([^]u64)(d)
-		sw := ([^]u64)(s)
-		for n >= 32 {
+		for j >= 8 {
+			adw -= 8
+			dw := ([^]u64)(adw)
+			sw := ([^]u64)(adw - gap)
 			dw[0] = intrinsics.unaligned_load(&sw[0])
-			dw[1] = intrinsics.unaligned_load(&sw[1])
-			dw[2] = intrinsics.unaligned_load(&sw[2])
-			dw[3] = intrinsics.unaligned_load(&sw[3])
-			dw = ([^]u64)(uintptr(dw) + 32)
-			sw = ([^]u64)(uintptr(sw) + 32)
-			n -= 32
+			j -= 8
 		}
-		for n >= 8 {
-			dw[0] = intrinsics.unaligned_load(&sw[0])
-			dw = ([^]u64)(uintptr(dw) + 8)
-			sw = ([^]u64)(uintptr(sw) + 8)
-			n -= 8
-		}
-		d = ([^]byte)(dw)
-		s = ([^]byte)(sw)
-		for n > 0 {
-			d[0] = s[0]
-			d = ([^]byte)(uintptr(d) + 1)
-			s = ([^]byte)(uintptr(s) + 1)
-			n -= 1
+		for j > 0 {
+			j -= 1
+			d[j] = s[j]
 		}
 		return dst
 	}
+
+	if s > d && uintptr(s)-uintptr(d) < uintptr(len) {
+		// Forward overlap copies ascending, which is what memcpy does.
+		return native_memcpy(dst, src, len)
+	}
+	return native_memcpy(dst, src, len)
+}
+
+// No rep movsb: the prototype matrix showed order-of-magnitude
+// layout-dependent cliffs for it on the primary target, while 8-byte
+// chunks held ~20 GB/s in every size/offset/layout measured. The
+// destination is aligned with head bytes; the source is read with
+// explicit unaligned loads. Forward overlap is safe ascending.
+@(private="file", optimization_mode="none")
+native_memcpy :: proc "contextless" (dst, src: rawptr, len: int) -> rawptr {
+	d, s := ([^]byte)(dst), ([^]byte)(src)
+	if d == s || len <= 0 {
+		return dst
+	}
+	n := len
+	for n > 0 && uintptr(d) & 7 != 0 {
+		d[0] = s[0]
+		d = ([^]byte)(uintptr(d) + 1)
+		s = ([^]byte)(uintptr(s) + 1)
+		n -= 1
+	}
+	dw := ([^]u64)(d)
+	sw := ([^]u64)(s)
+	for n >= 32 {
+		dw[0] = intrinsics.unaligned_load(&sw[0])
+		dw[1] = intrinsics.unaligned_load(&sw[1])
+		dw[2] = intrinsics.unaligned_load(&sw[2])
+		dw[3] = intrinsics.unaligned_load(&sw[3])
+		dw = ([^]u64)(uintptr(dw) + 32)
+		sw = ([^]u64)(uintptr(sw) + 32)
+		n -= 32
+	}
+	for n >= 8 {
+		dw[0] = intrinsics.unaligned_load(&sw[0])
+		dw = ([^]u64)(uintptr(dw) + 8)
+		sw = ([^]u64)(uintptr(sw) + 8)
+		n -= 8
+	}
+	d = ([^]byte)(dw)
+	s = ([^]byte)(sw)
+	for n > 0 {
+		d[0] = s[0]
+		d = ([^]byte)(uintptr(d) + 1)
+		s = ([^]byte)(uintptr(s) + 1)
+		n -= 1
+	}
+	return dst
 }

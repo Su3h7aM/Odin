@@ -1901,6 +1901,16 @@ gb_internal void lb_emit_memmove(lbProcedure *p, LLVMValueRef dst, unsigned dst_
 		}
 	}
 
+	if (build_context.metrics.os == TargetOs_linux && build_context.metrics.arch == TargetArch_amd64 &&
+	    build_context.sanitizer_flags == 0) {
+		auto args = array_make<lbValue>(temporary_allocator(), 3);
+		args[0] = {dst, t_rawptr};
+		args[1] = {src, t_rawptr};
+		args[2] = {LLVMBuildIntCast2(p->builder, len, int_type, false, ""), t_int};
+		lb_emit_runtime_call(p, "native_memmove", args);
+		return;
+	}
+
 	LLVMTypeRef params[3] = {ptr_type, ptr_type, int_type};
 	LLVMTypeRef proc_type = LLVMFunctionType(ptr_type, params, gb_count_of(params), false);
 	LLVMValueRef proc = LLVMGetNamedFunction(m->mod, "memmove");
