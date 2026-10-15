@@ -171,7 +171,7 @@ gb_internal bool owned_link_synthesizes_init_array_bounds(String link_name) {
 // those exact objects rather than reassembling, so proof and link can
 // never observe different bytes, tool versions, or include state.
 struct LinkerVerifiedAsm {
-	String input;
+	String input;    // heap-owned: the trial parser's path dies on managed fallback
 	String obj_path;
 	bool proven;
 };
@@ -189,7 +189,7 @@ gb_internal String *linker_verified_asm_dir_slot(void) {
 gb_internal void linker_verified_asm_set_dir(String dir) {
 	String *slot = linker_verified_asm_dir_slot();
 	if (slot->len == 0) {
-		*slot = dir;
+		*slot = copy_string(heap_allocator(), dir);
 	}
 }
 
@@ -227,7 +227,7 @@ gb_internal void linker_verified_asm_record(String input, String obj_path, bool 
 			return;
 		}
 	}
-	LinkerVerifiedAsm v = {input, obj_path, proven};
+	LinkerVerifiedAsm v = {copy_string(heap_allocator(), input), obj_path, proven};
 	array_add(map, v);
 }
 
@@ -252,6 +252,7 @@ gb_internal void linker_verified_asm_cleanup(void) {
 			gb_file_remove(p);
 			gb_free(heap_allocator(), p);
 		}
+		gb_free(heap_allocator(), v.input.text);
 	}
 	map->count = 0;
 	String *dir_slot = linker_verified_asm_dir_slot();
@@ -263,7 +264,8 @@ gb_internal void linker_verified_asm_cleanup(void) {
 		rmdir(p);
 #endif
 		gb_free(heap_allocator(), p);
-		dir_slot->len = 0;
+		gb_free(heap_allocator(), dir_slot->text);
+		*dir_slot = {};
 	}
 }
 

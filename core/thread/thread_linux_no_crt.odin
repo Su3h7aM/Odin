@@ -173,14 +173,14 @@ when ODIN_NO_CRT {
 		t := (^Thread)(arg)
 		mapping := t.mapping
 		context = runtime.default_context()
-		err := linux.rt_sigprocmask(.SIG_SETMASK, &mapping.mask, nil)
-		assert_contextless(err == .NONE)
 		when ODIN_ARCH == .amd64 {
-			// Adopt protocol identity after the inherited mask is back: the
-			// entry was registered pre-clone, and unmasking plus the epoch
-			// sync happen here so no signal observes a half-born thread.
+			// Keep application signals blocked until Running. A handler
+			// calling a credential setter before then would wait on the
+			// creator's gate while the creator waits on this child.
 			runtime._owned_thread_child_enter(_registry_node(mapping))
 		}
+		err := linux.rt_sigprocmask(.SIG_SETMASK, &mapping.mask, nil)
+		assert_contextless(err == .NONE)
 		// Always consume the post, even if Started is already set. Otherwise a
 		// self-cleanup thread could free Thread before start posts its semaphore.
 		sync.wait(&t.start_ok)
@@ -218,6 +218,42 @@ when ODIN_NO_CRT {
 			runtime._owned_thread_unregister(_registry_node(mapping))
 		}
 		return 0
+	}
+
+	when ODIN_ARCH == .amd64 {
+		// No allocation or user callback while the birth gate is held.
+		// The child inherits current credentials and becomes signal-ready
+		// before any subsequent broadcast can begin.
+		_clone_owned_thread :: proc "contextless" (t: ^Thread, stack, tp: rawptr) -> (pid: linux.Pid, err: linux.Errno) {
+			mapping := t.mapping
+			node := _registry_node(mapping)
+			saved := runtime._owned_thread_birth_begin()
+			defer runtime._owned_thread_birth_end(saved)
+			mapping.mask = linux.Sig_Set{uint(saved)}
+			runtime._owned_thread_register(node)
+
+			all_signals := linux.Sig_Set{max(uint)}
+			restore_mask: linux.Sig_Set
+			if err = linux.rt_sigprocmask(.SIG_BLOCK, &all_signals, &restore_mask); err != .NONE {
+				runtime._owned_thread_unregister(node)
+				return
+			}
+			flags := u32(linux.CLONE_VM | linux.CLONE_FS | linux.CLONE_FILES | linux.CLONE_SIGHAND | linux.CLONE_THREAD | linux.CLONE_SYSVSEM | linux.CLONE_SETTLS | linux.CLONE_PARENT_SETTID | linux.CLONE_CHILD_CLEARTID)
+			pid, err = linux.clone(_linux_thread_entry, stack, flags, t, &mapping.tid, tp, &mapping.tid)
+			mask_err := linux.rt_sigprocmask(.SIG_SETMASK, &restore_mask, nil)
+			assert_contextless(mask_err == .NONE)
+			if err != .NONE {
+				runtime._owned_thread_unregister(node)
+				return
+			}
+			for intrinsics.atomic_load(&node.state) != u32(runtime.Owned_Thread_State.Running) {
+				if sync.atomic_load_explicit(&mapping.tid, .Acquire) == 0 {
+					break
+				}
+				linux.sched_yield()
+			}
+			return
+		}
 	}
 
 	_create :: proc(procedure: Thread_Proc, priority: Thread_Priority, name: Maybe(string)) -> ^Thread {
@@ -283,9 +319,8 @@ when ODIN_NO_CRT {
 			mapping.size = size
 		}
 		when ODIN_ARCH == .amd64 {
-			// Register before clone so the entry exists before the child can
-			// observe a signal; the child fills tid and state itself. Any
-			// failure below unregisters again.
+			// Initialize the node before taking the birth gate. The clone
+			// helper registers it only after allocation is complete.
 			node := _registry_node(mapping)
 			node.next = nil
 			intrinsics.atomic_store(&node.tid, 0)
@@ -297,23 +332,10 @@ when ODIN_NO_CRT {
 			intrinsics.atomic_store(&node.cancel_mask, 0)
 			intrinsics.atomic_store(&node.cancel_pending, 0)
 			intrinsics.atomic_store(&node.bringup_error, 0)
-			runtime._owned_thread_register(node)
 		}
 		when ODIN_ARCH == .amd64 {
-			// Cancel deferral across clone and the readiness handshake below:
-			// a creator terminated mid-handshake would orphan its Starting
-			// child (nobody posts start_ok or joins it) while broadcasters
-			// wait on a lock the child may hold. The pending cancel replays
-			// after the create decision, preserving the async contract.
-			// Deferral defers delivery; it does not block protocol signals,
-			// so the creator still applies and acks broadcasts while
-			// waiting. That is load-bearing: the SETMASK restore below stays
-			// before the handshake wait, because waiting with 32/33 blocked
-			// would stall convergence (broadcaster waits the creator's ack)
-			// while the child waits on the broadcaster's lock and the
-			// creator waits on the child's Running: a three-way stall that
-			// otherwise ends in a process-wide fatal, never a hang, but is
-			// avoided entirely by restoring first.
+			// A terminated creator must not orphan a child waiting for
+			// start_ok. Replay cancellation after the create decision.
 			runtime._owned_cancel_mask_self()
 			defer runtime._owned_cancel_unmask_self()
 		}
@@ -330,22 +352,22 @@ when ODIN_NO_CRT {
 		t.procedure = procedure
 		t.name = name
 
-		all_signals := linux.Sig_Set{max(uint)}
-		if linux.rt_sigprocmask(.SIG_BLOCK, &all_signals, &mapping.mask) != .NONE {
-			when ODIN_ARCH == .amd64 {
-				// The node was registered above: every failure path below
-				// unregisters before freeing, or the joiner would keep a
-				// dangling entry (use-after-free on the next broadcast).
-				runtime._owned_thread_unregister(_registry_node(mapping))
+		pid: linux.Pid
+		clone_err: linux.Errno
+		when ODIN_ARCH == .amd64 {
+			pid, clone_err = _clone_owned_thread(t, stack, tp)
+		} else {
+			all_signals := linux.Sig_Set{max(uint)}
+			if linux.rt_sigprocmask(.SIG_BLOCK, &all_signals, &mapping.mask) != .NONE {
+				free(t, t.creation_allocator)
+				linux.munmap(memory, size)
+				return nil
 			}
-			free(t, t.creation_allocator)
-			linux.munmap(memory, size)
-			return nil
+			flags := u32(linux.CLONE_VM | linux.CLONE_FS | linux.CLONE_FILES | linux.CLONE_SIGHAND | linux.CLONE_THREAD | linux.CLONE_SYSVSEM | linux.CLONE_SETTLS | linux.CLONE_PARENT_SETTID | linux.CLONE_CHILD_CLEARTID)
+			pid, clone_err = linux.clone(_linux_thread_entry, stack, flags, t, &mapping.tid, tp, &mapping.tid)
+			mask_err := linux.rt_sigprocmask(.SIG_SETMASK, &mapping.mask, nil)
+			assert(mask_err == .NONE)
 		}
-		flags := u32(linux.CLONE_VM | linux.CLONE_FS | linux.CLONE_FILES | linux.CLONE_SIGHAND | linux.CLONE_THREAD | linux.CLONE_SYSVSEM | linux.CLONE_SETTLS | linux.CLONE_PARENT_SETTID | linux.CLONE_CHILD_CLEARTID)
-		pid, clone_err := linux.clone(_linux_thread_entry, stack, flags, t, &mapping.tid, tp, &mapping.tid)
-		mask_err := linux.rt_sigprocmask(.SIG_SETMASK, &mapping.mask, nil)
-		assert(mask_err == .NONE)
 		if clone_err != .NONE {
 			when ODIN_ARCH == .amd64 {
 				runtime._owned_thread_unregister(_registry_node(mapping))
@@ -355,21 +377,9 @@ when ODIN_NO_CRT {
 			return nil
 		}
 		when ODIN_ARCH == .amd64 {
-			// Readiness handshake: the child marks Running only after
-			// converging to the latest credential op and unmasking the
-			// protocol signals, recording a failed unmask in bringup_error.
-			// Creation fails loudly here instead of running user code with
-			// blocked protocol signals. Death before Running clears the
-			// tid word, so this wait always terminates; a zero tid with a
-			// live-but-slow child only ever fails creation (safe direction),
-			// never runs broken user code.
+			// The helper released the birth gate only after readiness or
+			// kernel exit. Failed bring-up never reaches user code.
 			bnode := _registry_node(mapping)
-			for intrinsics.atomic_load(&bnode.state) != u32(runtime.Owned_Thread_State.Running) {
-				if sync.atomic_load_explicit(&mapping.tid, .Acquire) == 0 {
-					break
-				}
-				linux.sched_yield()
-			}
 			if sync.atomic_load_explicit(&mapping.tid, .Acquire) == 0 || intrinsics.atomic_load(&bnode.bringup_error) != 0 {
 				mapping.abort = true
 				_join(t)

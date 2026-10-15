@@ -1375,7 +1375,7 @@ lockf :: proc "c" (fildes: FD, function: Lock_Function, size: off_t) -> result {
 	lock := flock{ l_whence = c.short(Whence.CUR), l_len = size }
 	switch function {
 	case .TEST:
-		lock.l_type = .RDLCK
+		lock.l_type = .WRLCK
 		if err := linux.fcntl_getlk(linux.Fd(fildes), linux.F_GETLK, cast(^linux.FLock)&lock); err != .NONE {
 			set_errno(Errno(err))
 			return .FAIL

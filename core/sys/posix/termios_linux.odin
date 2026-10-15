@@ -12,8 +12,8 @@ import "core:sys/linux"
 // tcgetattr and tcsetattr hand the caller's `termios` straight to the TCGETS
 // and TCSETS ioctls. Its first 36 bytes are the kernel layout in
 // `linux.Termios`; the remaining control characters and the baud rate fields
-// are untouched by the kernel and kept in userspace by the cfget/cfset
-// procedures below.
+// are untouched by the kernel. The cfget/cfset procedures below use the
+// kernel baud-rate bits in c_cflag, not the trailing speed fields.
 #assert(size_of(termios) == 60)
 #assert(offset_of(termios, c_iflag) == offset_of(linux.Termios, iflag))
 #assert(offset_of(termios, c_oflag) == offset_of(linux.Termios, oflag))
@@ -40,7 +40,13 @@ Get the input baud rate.
 */
 cfgetispeed :: proc "c" (termios_p: ^termios) -> speed_t {
 	cflag := u32(transmute(tcflag_t)termios_p.c_cflag)
-	return speed_t((cflag & u32(linux.CIBAUD)) / (u32(linux.CIBAUD) / u32(linux.CBAUD)))
+	rate := (cflag & u32(linux.CIBAUD)) / (u32(linux.CIBAUD) / u32(linux.CBAUD))
+	// A zero input-speed field uses the output speed, including after
+	// cfsetispeed(B0). This is also how the kernel decodes TCGETS flags.
+	if rate == 0 {
+		rate = cflag & u32(linux.CBAUD)
+	}
+	return speed_t(rate)
 }
 
 /*

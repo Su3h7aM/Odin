@@ -543,3 +543,66 @@ _f64_with_lo :: #force_inline proc "contextless" (x: f64, lo: u32) -> f64 {
 _f64_abs :: #force_inline proc "contextless" (x: f64) -> f64 {
 	return transmute(f64)(transmute(u64)x & 0x7fffffffffffffff)
 }
+
+// Integral rounding preserves signed zero; exception flags are not specified.
+linux_math_trunc_f64 :: proc "contextless" (x: f64) -> f64 {
+	bits := transmute(u64)x
+	exponent := int((bits >> 52) & 0x7ff) - 1023
+	if exponent < 0 {
+		return transmute(f64)(bits & 0x8000000000000000)
+	}
+	if exponent >= 52 {
+		return x
+	}
+	mask := (u64(1) << uint(52-exponent)) - 1
+	return transmute(f64)(bits &~ mask)
+}
+
+linux_math_floor_f64 :: proc "contextless" (x: f64) -> f64 {
+	integer := linux_math_trunc_f64(x)
+	return integer - 1 if x < integer else integer
+}
+
+linux_math_ceil_f64 :: proc "contextless" (x: f64) -> f64 {
+	integer := linux_math_trunc_f64(x)
+	return integer + 1 if x > integer else integer
+}
+
+// Nearest-even value semantics, independent of MXCSR rounding mode.
+linux_math_nearest_f64 :: proc "contextless" (x: f64) -> f64 {
+	bits := transmute(u64)x
+	sign := bits & 0x8000000000000000
+	magnitude := bits & 0x7fffffffffffffff
+	exponent := int((bits >> 52) & 0x7ff) - 1023
+	if exponent < 0 {
+		return transmute(f64)(sign | (0x3ff0000000000000 if magnitude > 0x3fe0000000000000 else 0))
+	}
+	if exponent >= 52 {
+		return x
+	}
+	shift := uint(52-exponent)
+	mask := (u64(1) << shift) - 1
+	fraction := bits & mask
+	half := u64(1) << (shift-1)
+	integer := bits &~ mask
+	if fraction > half || (fraction == half && ((integer >> shift) & 1) != 0) {
+		integer += mask + 1
+	}
+	return transmute(f64)integer
+}
+
+linux_math_trunc_f32 :: proc "contextless" (x: f32) -> f32 {
+	return f32(linux_math_trunc_f64(f64(x)))
+}
+
+linux_math_floor_f32 :: proc "contextless" (x: f32) -> f32 {
+	return f32(linux_math_floor_f64(f64(x)))
+}
+
+linux_math_ceil_f32 :: proc "contextless" (x: f32) -> f32 {
+	return f32(linux_math_ceil_f64(f64(x)))
+}
+
+linux_math_nearest_f32 :: proc "contextless" (x: f32) -> f32 {
+	return f32(linux_math_nearest_f64(f64(x)))
+}

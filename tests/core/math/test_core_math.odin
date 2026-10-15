@@ -1,9 +1,14 @@
 // Tests "math.odin" in "core:math".
 package test_core_math
 
+import "base:intrinsics"
+import "base:runtime"
 import "core:math"
 import "core:strconv"
 import "core:testing"
+
+_ :: intrinsics
+_ :: runtime
 
 @test
 test_classify_f16 :: proc(t: ^testing.T) {
@@ -198,6 +203,13 @@ test_trunc_f32 :: proc(t: ^testing.T) {
 		assert(i == d.i)
 		r = math.trunc_f32(d.v)
 		testing.expectf(t, r == d.e, "%h -> %h != %h", d.v, r, d.e)
+		when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+			nearest := d.e if i < 2 else math.round_f32(d.v)
+			testing.expect(t, transmute(u32)runtime.linux_math_trunc_f32(d.v) == transmute(u32)d.e)
+			testing.expect(t, transmute(u32)runtime.linux_math_floor_f32(d.v) == transmute(u32)math.floor_f32(d.v))
+			testing.expect(t, transmute(u32)runtime.linux_math_ceil_f32(d.v) == transmute(u32)math.ceil_f32(d.v))
+			testing.expect(t, transmute(u32)runtime.linux_math_nearest_f32(d.v) == transmute(u32)nearest)
+		}
 	}
 
 	v = math.SNAN_F32
@@ -207,6 +219,15 @@ test_trunc_f32 :: proc(t: ^testing.T) {
 	v = math.QNAN_F32
 	r = math.trunc_f32(v)
 	testing.expectf(t, math.is_nan_f32(r), "%f -> %f != NaN", v, r)
+	when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+		testing.expect(t, runtime.linux_math_nearest_f32(0.5) == 0 && transmute(u32)runtime.linux_math_nearest_f32(-0.5) == 0x80000000)
+		testing.expect(t, runtime.linux_math_nearest_f32(1.5) == 2 && runtime.linux_math_nearest_f32(-1.5) == -2)
+		testing.expect(t, math.is_nan_f32(runtime.linux_math_trunc_f32(v)))
+		testing.expect(t, math.is_nan_f32(runtime.linux_math_floor_f32(v)))
+		testing.expect(t, math.is_nan_f32(runtime.linux_math_ceil_f32(v)))
+		testing.expect(t, math.is_nan_f32(runtime.linux_math_nearest_f32(v)))
+	}
+
 }
 
 @test
@@ -260,6 +281,13 @@ test_trunc_f64 :: proc(t: ^testing.T) {
 		assert(i == d.i)
 		r = math.trunc_f64(d.v)
 		testing.expectf(t, r == d.e, "%h -> %h != %h", d.v, r, d.e)
+		when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+			nearest := d.e if i < 2 else math.round_f64(d.v)
+			testing.expect(t, transmute(u64)runtime.linux_math_trunc_f64(d.v) == transmute(u64)d.e)
+			testing.expect(t, transmute(u64)runtime.linux_math_floor_f64(d.v) == transmute(u64)math.floor_f64(d.v))
+			testing.expect(t, transmute(u64)runtime.linux_math_ceil_f64(d.v) == transmute(u64)math.ceil_f64(d.v))
+			testing.expect(t, transmute(u64)runtime.linux_math_nearest_f64(d.v) == transmute(u64)nearest)
+		}
 	}
 
 	v = math.SNAN_F64
@@ -269,6 +297,15 @@ test_trunc_f64 :: proc(t: ^testing.T) {
 	v = math.QNAN_F64
 	r = math.trunc_f64(v)
 	testing.expectf(t, math.is_nan_f64(r), "%f -> %f != NaN", v, r)
+	when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+		testing.expect(t, runtime.linux_math_nearest_f64(0.5) == 0 && transmute(u64)runtime.linux_math_nearest_f64(-0.5) == 0x8000000000000000)
+		testing.expect(t, runtime.linux_math_nearest_f64(1.5) == 2 && runtime.linux_math_nearest_f64(-1.5) == -2)
+		testing.expect(t, math.is_nan_f64(runtime.linux_math_trunc_f64(v)))
+		testing.expect(t, math.is_nan_f64(runtime.linux_math_floor_f64(v)))
+		testing.expect(t, math.is_nan_f64(runtime.linux_math_ceil_f64(v)))
+		testing.expect(t, math.is_nan_f64(runtime.linux_math_nearest_f64(v)))
+	}
+
 }
 
 @test
@@ -1451,5 +1488,94 @@ test_nextafter :: proc(t: ^testing.T) {
 		testing.expectf(t,
 			transmute(u64)r == transmute(u64)datum.r,
 			"%h, %h -> %h != %h", datum.x, datum.y, r, datum.r)
+	}
+}
+
+when ODIN_OS == .Linux && ODIN_ARCH == .amd64 {
+	// Do not let the compiler constant-fold the call under test.
+	@(optimization_mode="none")
+	dynamic_fma_f64 :: proc "contextless" (a, b, c: f64) -> f64 {
+		return intrinsics.fused_mul_add(a, b, c)
+	}
+
+	@(optimization_mode="none")
+	dynamic_fma_f32 :: proc "contextless" (a, b, c: f32) -> f32 {
+		return intrinsics.fused_mul_add(a, b, c)
+	}
+
+	@(test)
+	fma_f64_boundaries :: proc(t: ^testing.T) {
+		vectors := [][4]u64{
+			// (1+2**-52)*(1-2**-52)-1 = -2**-104.
+			{0x3ff0000000000001, 0x3feffffffffffffe, 0xbff0000000000000, 0xb970000000000000},
+			// An overflowing product cancels to the largest finite number.
+			{0x7fefffffffffffff, 0x4000000000000000, 0xffefffffffffffff, 0x7fefffffffffffff},
+			{0x7fefffffffffffff, 0x4000000000000000, 0, 0x7ff0000000000000},
+			// A half-subnormal product is not rounded before addition.
+			{1, 0x3fe0000000000000, 1, 2},
+			{1, 0x3fe0000000000000, 0, 0},
+			{0x8000000000000001, 0x3fe0000000000000, 0, 0x8000000000000000},
+			// Tie rounding with even and odd retained significands.
+			{0x3ca0000000000000, 0x3ff0000000000000, 0x3ff0000000000000, 0x3ff0000000000000},
+			{0x3ca0000000000000, 0x3ff0000000000000, 0x3ff0000000000001, 0x3ff0000000000002},
+			{0x0010000000000000, 0x3ff0000000000000, 0x800fffffffffffff, 1},
+			{0x3ff0000000000000, 0x3ff0000000000000, 0xbff0000000000000, 0},
+			{0x8000000000000000, 0x3ff0000000000000, 0x8000000000000000, 0x8000000000000000},
+			{0x8000000000000000, 0x3ff0000000000000, 0, 0},
+			{0x7ff0000000000000, 0xbff0000000000000, 0, 0xfff0000000000000},
+			{0x3ff0000000000000, 0x3ff0000000000000, 0x7ff0000000000000, 0x7ff0000000000000},
+		}
+		for v in vectors {
+			a, b, c := transmute(f64)v[0], transmute(f64)v[1], transmute(f64)v[2]
+			native := runtime.linux_math_fma_f64(a, b, c)
+			lowered := dynamic_fma_f64(a, b, c)
+			testing.expectf(t, transmute(u64)native == v[3], "native f64: %h, expected bits %x", native, v[3])
+			testing.expectf(t, transmute(u64)lowered == v[3], "intrinsic f64: %h, expected bits %x", lowered, v[3])
+		}
+	}
+
+	@(test)
+	fma_f32_boundaries :: proc(t: ^testing.T) {
+		vectors := [][4]u32{
+			{0x3f800001, 0x3f7ffffe, 0xbf800000, 0xa8800000},
+			{0x7f7fffff, 0x40000000, 0xff7fffff, 0x7f7fffff},
+			{0x7f7fffff, 0x40000000, 0, 0x7f800000},
+			{1, 0x3f000000, 1, 2},
+			{1, 0x3f000000, 0, 0},
+			{0x80000001, 0x3f000000, 0, 0x80000000},
+			// Exact value is just below a f32 midpoint but rounds to that
+			// midpoint in f64. Rounding through f64 would give the wrong f32.
+			{0x3f800001, 0x337ffffe, 0x3f800001, 0x3f800001},
+			{0x80000000, 0x3f800000, 0x80000000, 0x80000000},
+		}
+		for v in vectors {
+			a, b, c := transmute(f32)v[0], transmute(f32)v[1], transmute(f32)v[2]
+			native := runtime.linux_math_fma_f32(a, b, c)
+			lowered := dynamic_fma_f32(a, b, c)
+			testing.expectf(t, transmute(u32)native == v[3], "native f32: %h, expected bits %x", native, v[3])
+			testing.expectf(t, transmute(u32)lowered == v[3], "intrinsic f32: %h, expected bits %x", lowered, v[3])
+		}
+	}
+
+	@(test)
+	fma_special_values :: proc(t: ^testing.T) {
+		vectors := [][3]u64{
+			{0x7ff0000000000000, 0, 0},
+			{0, 0xfff0000000000000, 0},
+			{0x7ff0000000000000, 0x3ff0000000000000, 0xfff0000000000000},
+			{0xfff0000000000000, 0xbff0000000000000, 0xfff0000000000000},
+			{0x7ff8000000001234, 0x3ff0000000000000, 0},
+			{0x3ff0000000000000, 0x7ff0000000001234, 0},
+			{0x3ff0000000000000, 0x3ff0000000000000, 0x7ff8000000001234},
+		}
+		for v in vectors {
+			a, b, c := transmute(f64)v[0], transmute(f64)v[1], transmute(f64)v[2]
+			x := runtime.linux_math_fma_f64(a, b, c)
+			y := dynamic_fma_f64(a, b, c)
+			testing.expect(t, x != x && y != y)
+			x32 := runtime.linux_math_fma_f32(f32(a), f32(b), f32(c))
+			y32 := dynamic_fma_f32(f32(a), f32(b), f32(c))
+			testing.expect(t, x32 != x32 && y32 != y32)
+		}
 	}
 }

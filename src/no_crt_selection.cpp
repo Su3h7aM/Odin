@@ -13,8 +13,8 @@
 //   - an actual emitted Odin definition with identical link name and
 //     type (emission-guaranteed @(require) definitions count for
 //     assembler-declared externs, which carry no Odin type);
-//   - an LLVM-recognized intrinsic (delegated to LLVM's own intrinsic
-//     table, never a prefix);
+//   - an LLVM-recognized scalar intrinsic with an instruction-only
+//     lowering, or an actual emitted provider for its possible libcall;
 //   - a backend-synthesized runtime stub matching the producer
 //     constant and exact stub signature;
 //   - a linker-synthesized section bound under the verified owned
@@ -691,19 +691,74 @@ gb_internal bool emitted_def_matches_foreign(Checker *c, EntityKind kind, String
 	return false;
 }
 
+// Intrinsic recognition does not prove a libc-free lowering (e.g. exp2).
+gb_internal AutoEdgeClass classify_llvm_intrinsic(AutoCtx *ctx, String name) {
+	char const *c_name = alloc_cstring(temporary_allocator(), name);
+	if (LLVMLookupIntrinsicID(c_name, cast(size_t)name.len) == 0) {
+		return AutoEdge_Gap;
+	}
+	if (string_starts_with(name, str_lit("llvm.x86."))) {
+		// ISA intrinsics select instructions or fail codegen, not C providers.
+		return AutoEdge_Owned;
+	}
+	if (name == str_lit("llvm.trap") || name == str_lit("llvm.debugtrap") ||
+	    name == str_lit("llvm.readcyclecounter") || name == str_lit("llvm.readsteadycounter") ||
+	    name == str_lit("llvm.assume") || name == str_lit("llvm.prefetch.p0") ||
+	    name == str_lit("llvm.lifetime.start.p0") || name == str_lit("llvm.lifetime.end.p0")) {
+		return AutoEdge_Owned;
+	}
+	if (name == str_lit("llvm.sqrt.f32") || name == str_lit("llvm.sqrt.f64") ||
+	    name == str_lit("llvm.fabs.f32") || name == str_lit("llvm.fabs.f64") ||
+	    name == str_lit("llvm.copysign.f32") || name == str_lit("llvm.copysign.f64")) {
+		// SSE2 square root and bit operations on the native amd64 baseline.
+		return AutoEdge_Owned;
+	}
+	struct MathLowering {
+		String intrinsic;
+		String libcall;
+		isize arity;
+	};
+	MathLowering const lowerings[] = {
+		{str_lit("llvm.sin"),     str_lit("sin"), 1},
+		{str_lit("llvm.cos"),     str_lit("cos"), 1},
+		{str_lit("llvm.exp"),     str_lit("exp"), 1},
+		{str_lit("llvm.pow"),     str_lit("pow"), 2},
+		{str_lit("llvm.fma"),     str_lit("fma"), 3},
+		{str_lit("llvm.fmuladd"), str_lit("fma"), 3},
+		{str_lit("llvm.ceil"),    str_lit("ceil"), 1},
+		{str_lit("llvm.floor"),   str_lit("floor"), 1},
+		{str_lit("llvm.trunc"),   str_lit("trunc"), 1},
+		{str_lit("llvm.nearbyint"), str_lit("nearbyint"), 1},
+	};
+	Type *const float_types[] = {t_f32, t_f64};
+	for (MathLowering const &lowering : lowerings) {
+		for (Type *float_type : float_types) {
+			bool is_f32 = float_type == t_f32;
+			String intrinsic = concatenate_strings(temporary_allocator(), lowering.intrinsic,
+			                                       is_f32 ? str_lit(".f32") : str_lit(".f64"));
+			if (name != intrinsic) {
+				continue;
+			}
+			String libcall = is_f32 ? concatenate_strings(temporary_allocator(), lowering.libcall, str_lit("f")) : lowering.libcall;
+			Type *params = alloc_type_tuple();
+			slice_init(&params->Tuple.variables, permanent_allocator(), lowering.arity);
+			for (isize i = 0; i < lowering.arity; i++) {
+				params->Tuple.variables[i] = alloc_entity_param(nullptr, blank_token, float_type, false, true);
+			}
+			Type *results = alloc_type_tuple();
+			slice_init(&results->Tuple.variables, permanent_allocator(), 1);
+			results->Tuple.variables[0] = alloc_entity_param(nullptr, blank_token, float_type, false, true);
+			Type *type = alloc_type_proc(nullptr, params, lowering.arity, results, 1, false, ProcCC_CDecl);
+			return emitted_def_matches_foreign(ctx->c, Entity_Procedure, libcall, type) ? AutoEdge_Owned : AutoEdge_Gap;
+		}
+	}
+	return AutoEdge_Gap;
+}
+
 // Classifies one reachable blank foreign reference (no library).
 gb_internal AutoEdgeClass classify_blank_edge(AutoCtx *ctx, Entity *e, String link_name, Type *type) {
 	if (link_name.len != 0 && string_starts_with(link_name, str_lit("llvm."))) {
-		// Recognized LLVM intrinsics lower to instructions in codegen
-		// and never reach the linker. Recognition is delegated to
-		// LLVM's own intrinsic table: an unrecognized name is an
-		// honest proof gap, never an owned prefix match.
-		char const *c_name = alloc_cstring(temporary_allocator(), link_name);
-		unsigned id = LLVMLookupIntrinsicID(c_name, cast(size_t)link_name.len);
-		if (id != 0) {
-			return AutoEdge_Owned;
-		}
-		return AutoEdge_Gap;
+		return classify_llvm_intrinsic(ctx, link_name);
 	}
 	// Backend-synthesized runtime stubs have no checked entity to match:
 	// the backend unconditionally generates them in every codegen run.
@@ -953,9 +1008,8 @@ gb_internal bool asm_undef_resolves(Checker *c, String sym) {
 // never used: a pre-existing path is not trusted.
 gb_internal String sel_proof_dir(void) {
 	gb_local_persist bool done = false;
-	gb_local_persist String dir = {};
 	if (done) {
-		return dir;
+		return *linker_verified_asm_dir_slot();
 	}
 	done = true;
 	String temp_dir = temporary_directory(temporary_allocator());
@@ -973,9 +1027,9 @@ gb_internal String sel_proof_dir(void) {
 		gb_string_free(s);
 		BOOL ok = CreateDirectoryA(c_path, nullptr);
 		if (ok) {
-			dir = copy_string(permanent_allocator(), make_string_c(c_path));
+			linker_verified_asm_set_dir(make_string_c(c_path));
 			gb_free(heap_allocator(), c_path);
-			return dir;
+			return *linker_verified_asm_dir_slot();
 		}
 		DWORD err = GetLastError();
 		gb_free(heap_allocator(), c_path);
@@ -993,9 +1047,10 @@ gb_internal String sel_proof_dir(void) {
 		gb_string_free(s);
 		return {};
 	}
-	dir = copy_string(permanent_allocator(), make_string_c(s));
+	// Registry strings must survive a managed fallback's arena rewind.
+	linker_verified_asm_set_dir(make_string_c(s));
 	gb_string_free(s);
-	return dir;
+	return *linker_verified_asm_dir_slot();
 #endif
 }
 

@@ -7,10 +7,7 @@ import "base:intrinsics"
 // Owned-thread registry and targeted-signal credential/cancel protocol for
 // Linux amd64 without the C runtime.
 //
-// Profile: explicit `-no-crt` static executables only. The default managed
-// profile keeps the loader, pthreads, and libc errno untouched; nothing here
-// runs there. Helpers carry distinct Odin names and no C link names; the
-// compiler selects providers at emission.
+// Used by the Linux amd64 no-CRT profile. Managed builds keep libc threads.
 //
 // Ownership and lifetime rules:
 //   - Every live owned thread has exactly one registry entry. Entry storage
@@ -148,10 +145,7 @@ when ODIN_NO_CRT && ODIN_ARCH == .amd64 {
 	@(private="file") broadcast_a, broadcast_b, broadcast_c: i64
 	@(private="file") process_pid: i32
 
-	// Seqlock epoch guarding the published op (kind/a/b/c) against torn
-	// reads by late joiners: the broadcaster stores odd before publishing
-	// and even after the seq bump; readers retry while odd or changed. The
-	// broadcaster is single (broadcast_lock) so one epoch suffices.
+	// Signal handlers retry reads while an operation is being committed.
 	@(private="file") broadcast_epoch: u64
 
 	// Serializes whole broadcasts. Targets never need this lock to apply or
@@ -368,6 +362,7 @@ when ODIN_NO_CRT && ODIN_ARCH == .amd64 {
 	}
 	// Register an embedder-owned entry. The entry must be initialized
 	// (STARTING, tid 0 allowed) and must stay valid until unregistered.
+	// Hold the birth gate until the cloned child publishes Running.
 	// Infallible: pure pointer surgery under a short spinlock hold, with
 	// async-cancel deferred across the hold so a terminated holder can
 	// never strand the lock.
@@ -505,10 +500,7 @@ when ODIN_NO_CRT && ODIN_ARCH == .amd64 {
 		return 0
 	}
 
-	// Seqlock read of the currently published op. Returns false when the
-	// publisher is mid-publish for the whole bounded window; the caller
-	// then leaves its ack stale so the converge loop signals it normally.
-	// Lock-free, allocation-free, bounded: safe in handlers and bring-up.
+	// Bounded seqlock read; a failed read leaves the handler's ack stale.
 	@(private="file")
 	_owned_read_published_op :: proc "contextless" () -> (seq: u64, kind: u32, a, b, c: i64, ok: bool) {
 		for _ in 0..<1000 {
@@ -530,30 +522,27 @@ when ODIN_NO_CRT && ODIN_ARCH == .amd64 {
 		return 0, 0, 0, 0, 0, false
 	}
 
-	// Bring-up for a freshly cloned child, called on the child before it
-	// unmasks protocol signals: records its tid, waits out any active
-	// broadcast (birth gate), holds that gate through the last apply, the
-	// TLS bind, the unmask, and the Running publication, so no broadcast
-	// can publish/collect in the post-apply/pre-Running window while this
-	// child is still Starting. Converges to the latest published credential
-	// op, binds the handler-visible self pointer, unmasks the two reserved
-	// signals once installed (recording a failed unmask for the creator's
-	// handshake), replays an armed cancel (pre-birth arming or a creator
-	// race) before the user procedure runs, and marks running last so the
-	// handshake observes the final bring-up result together with Running.
-	// Registration itself happened pre-clone. The hold plus the direct
-	// apply (not a bare epoch adopt) closes the birth-during-broadcast
-	// race: the broadcast never waits for Starting entries, and the held
-	// gate serializes publication against this bring-up, so the child can
-	// neither miss a committed op nor be skipped while stale. Credential
-	// ops are absolute assignments, so the latest op converges the child
-	// whatever it missed. While holding the gate the child performs only
-	// bounded work (seqlock read, two syscalls, stores) and holds no other
-	// lock, so the hold cannot deadlock the broadcaster; cancel is
-	// deferred across it, so termination cannot strand it either. If the
-	// read races publication for the whole window, the ack stays stale and
-	// the next broadcast signals the child normally; nothing runs user
-	// code with a false claim of convergence.
+	// Creator-held from registration through child Running. Clone inherits
+	// current credentials; later broadcasts cannot skip the new thread.
+	// No allocation or user callbacks while held. Release on every failure.
+	_owned_thread_birth_begin :: proc "contextless" () -> u64 {
+		_owned_cancel_mask_self()
+		saved := _owned_app_signals_block()
+		for intrinsics.atomic_exchange(&broadcast_lock, 1) != 0 {
+			_ = intrinsics.syscall(_SYS_sched_yield)
+		}
+		return saved
+	}
+
+	_owned_thread_birth_end :: proc "contextless" (saved: u64) {
+		intrinsics.atomic_exchange(&broadcast_lock, 0)
+		_owned_cancel_unmask_self()
+		_owned_app_signals_restore(saved)
+	}
+
+	// The creator holds the birth gate until this procedure publishes
+	// Running. The kernel-inherited credentials are already current. The
+	// caller restores the intended application-signal mask after return.
 	_owned_thread_child_enter :: proc "contextless" (entry: ^Owned_Thread_Entry) {
 		self_tid := _raw_gettid()
 		intrinsics.atomic_store(&entry.tid, self_tid)
@@ -561,40 +550,17 @@ when ODIN_NO_CRT && ODIN_ARCH == .amd64 {
 		// through the self pointer, and any signal after the unmask must
 		// find it.
 		owned_self_entry = entry
-		// Guard cancel before touching shared protocol state: a 32 landing
-		// mid-bring-up must defer (replayed after release) rather than
-		// exit holding the gate and stranding every later broadcast.
+		// Defer cancellation until protocol identity is initialized. The
+		// creator owns the gate; the child never acquires or releases it.
 		_owned_cancel_mask_self()
-		// Block application signals across the hold like every broadcast
-		// hold: no user handler can interrupt this thread mid-hold, so
-		// same-thread re-entry is impossible by invariant (32/33 stay
-		// deliverable; 33 applies lock-free, 32 defers through the guard).
-		// Birth gate, held through Running publication: acquire, then no
-		// broadcast can publish/collect until the release below. No timeout
-		// workaround: the holder's run always ends (completion, or
-		// whole-process fatal on divergence), so acquisition terminates
-		// with the child either converged or dead with the process.
-		for intrinsics.atomic_exchange(&broadcast_lock, 1) != 0 {
-			_ = intrinsics.syscall(_SYS_sched_yield)
-		}
-		saved_enter := _owned_app_signals_block()
-		defer _owned_app_signals_restore(saved_enter)
-		if s, k, x, y, z, ok := _owned_read_published_op(); ok && s != 0 {
-			res := _owned_apply_cred_op(k, x, y, z)
-			intrinsics.atomic_store(&entry.apply_result, i32(res))
-			intrinsics.atomic_store(&entry.ack, s)
-		}
+		_ = _owned_app_signals_block()
+		intrinsics.atomic_store(&entry.apply_result, 0)
+		intrinsics.atomic_store(&entry.ack, intrinsics.atomic_load(&broadcast_seq))
 		if protocol_ready {
-			// Single typed leaf with the full 4-argument unmask; the
-			// result is recorded, never discarded. A failed unmask leaves
-			// protocol signals blocked, so the creator's handshake fails
-			// creation loudly instead of running user code with a silently
-			// blocked protocol. Recorded before Running so the handshake
-			// observing Running also observes the final result.
+			// Publish failure before Running so the creator can abort.
 			intrinsics.atomic_store(&entry.bringup_error, i32(_owned_unmask_protocol()))
 		}
 		intrinsics.atomic_store(&entry.state, u32(Owned_Thread_State.Running))
-		intrinsics.atomic_exchange(&broadcast_lock, 0)
 		_owned_cancel_unmask_self()
 		if protocol_ready {
 			// A cancel armed before the TLS self pointer existed was
@@ -739,154 +705,56 @@ when ODIN_NO_CRT && ODIN_ARCH == .amd64 {
 		return 0
 	}
 
-	// Broadcasts one credential op to every running owned thread but the
-	// caller, who applies it inside only after all resources are preflighted
-	// (gate acquired, cancel deferred, arguments copied to static storage),
-	// so later-created threads inherit the new credentials. Synchronous:
-	// returns only after every live owned thread applied with result 0, or
-	// terminates the whole process when it cannot prove that. 0 on full
-	// success, negative kernel errno otherwise. Fail-closed means process
-	// termination, never a flag: anything that fails BEFORE any mutation is
-	// possible (bad kind, unwired protocol, or a failed direct apply) leaves
-	// every thread untouched and returns an ordinary error. Same-thread
-	// re-entry is impossible by invariant (application signals stay blocked
-	// across every hold), so there is no synthetic error path. Deprivileging
-	// is irreversible, so rollback after a partial application is impossible;
-	// any failure once mutation is possible (missed deadline, failed peer
-	// apply, delivery failure with unproven state) ends the process with a
-	// lock-free diagnostic and exit_group. Refusing future calls while
-	// inconsistently privileged threads keep running would be fail-open,
-	// not fail-closed. Success (0)
-	// means every registered live thread applied the op with result 0: no
-	// ordinary error ever leaves divergent privileges behind. Threads born
-	// mid-broadcast converge via the bring-up gate plus converge passes;
-	// exited threads carry no credentials and count as done once
-	// unregistered.
-	//
-	// Async-signal-safety (setuid/setgid are on the man7 signal-safety list,
-	// so a user handler may call them): this path allocates nothing (no heap
-	// snapshot; every sweep walks the live intrusive list under short
-	// signal-masked takes, and list membership pins lifetime because freeing
-	// strictly follows removal under the same lock), takes no heap locks,
-	// and never self-deadlocks. Application signals stay blocked across the
-	// whole hold, so same-thread re-entry is impossible by invariant; a
-	// nested call from a delivered handler always runs as a fresh broadcast
-	// that serializes and converges normally, and a valid handler request
-	// succeeds once delivered instead of taking a synthetic error.
+	// Synchronous process-wide update. A caller failure leaves publication
+	// unchanged; failure to converge after mutation terminates the process.
+	// Allocation-free, with application signals and async cancellation deferred.
 	_owned_credentials_broadcast :: proc "contextless" (kind: u32, a, b, c: i64) -> int {
 		if kind < 1 || kind > 6 {
 			return -22 // EINVAL: validated before any mutation is possible
 		}
-		// Count first: with no live peers the caller's direct apply is the
-		// whole broadcast, and no failure below can diverge anything.
+		saved_bcast := _owned_app_signals_block()
+		defer _owned_app_signals_restore(saved_bcast)
+		_owned_cancel_mask_self()
+		defer _owned_cancel_unmask_self()
+		for intrinsics.atomic_exchange(&broadcast_lock, 1) != 0 {
+			_ = intrinsics.syscall(_SYS_sched_yield)
+		}
+		defer intrinsics.atomic_exchange(&broadcast_lock, 0)
+
+		// Count under the birth gate, not before acquiring it: a creator
+		// may have finished while we waited. Registration and clone hold
+		// this same gate until the child is Running.
 		cap := 0
-		saved_count := _owned_app_signals_block()
 		for intrinsics.atomic_exchange(&registry_lock, 1) != 0 {
 		}
 		for it := registry_head; it != nil; it = it.next {
 			cap += 1
 		}
 		intrinsics.atomic_exchange(&registry_lock, 0)
-		_owned_app_signals_restore(saved_count)
-		if cap <= 1 {
-			// Only us (or nobody) registered — but a birth may register
-			// concurrently, so the fast path still publishes under the
-			// gate. Proof it cannot bypass a Starting node: the count above
-			// walks the whole list under the lock, so a Starting node at
-			// count time forces cap >= 2 (multi path, never here). A birth
-			// after count time gates on the lock held below, then applies
-			// this published op in bring-up; a birth before count time was
-			// already counted. Either way the child converges, and the
-			// direct apply below inherits consistently through the creator.
-			// No snapshot or converge loop is needed (no peers to signal),
-			// and no failure here can diverge anything: peers do not exist.
-			// Application signals stay blocked across the whole hold (fast
-			// paths included): no user handler can interrupt this thread
-			// mid-hold, so same-thread re-entry is impossible by invariant
-			// and needs no error path. Restored last, after lock release and
-			// cancel replay, so pending handlers observe a clean state.
-			saved_fast := _owned_app_signals_block()
-			defer _owned_app_signals_restore(saved_fast)
-			_owned_cancel_mask_self()
-			defer _owned_cancel_unmask_self()
-			for intrinsics.atomic_exchange(&broadcast_lock, 1) != 0 {
-				_ = intrinsics.syscall(_SYS_sched_yield)
-			}
-			defer intrinsics.atomic_exchange(&broadcast_lock, 0)
-			intrinsics.atomic_store(&broadcast_epoch, intrinsics.atomic_load(&broadcast_epoch) + 1)
-			intrinsics.atomic_store(&broadcast_kind, kind)
-			intrinsics.atomic_store(&broadcast_a, a)
-			intrinsics.atomic_store(&broadcast_b, b)
-			intrinsics.atomic_store(&broadcast_c, c)
-			if self_res := _owned_apply_cred_op(kind, a, b, c); self_res != 0 {
-				intrinsics.atomic_store(&broadcast_epoch, intrinsics.atomic_load(&broadcast_epoch) + 1)
-				return self_res
-			}
-			// The bump commits the op for gated bring-up readers; its value
-			// is unneeded here (no peers to converge).
-			intrinsics.atomic_add(&broadcast_seq, 1)
-			intrinsics.atomic_store(&broadcast_epoch, intrinsics.atomic_load(&broadcast_epoch) + 1)
-			return 0
+		if cap > 1 && !protocol_ready {
+			return -22 // EINVAL: no handler installed, no mutation yet
 		}
-		if !protocol_ready {
-			// No mutation has happened (the caller applies inside, below),
-			// so this stays an ordinary error: signaling now would hit
-			// default dispositions. Loud, never silent direct-only.
-			return -22 // EINVAL
-		}
-		// Deferred first so it runs last: the replayed cancel must observe
-		// released locks and freed memory, never the reverse.
-		// Application signals are blocked across the whole run and restored
-		// only after lock release and cancel replay (registered first so it
-		// runs last): a user handler can never interrupt the holding thread,
-		// which makes same-thread re-entry impossible by invariant — no
-		// synthetic error, and a valid handler request always runs as a
-		// fresh broadcast once delivered. 32/33 stay deliverable throughout;
-		// 33 applies lock-free on any thread, 32 defers through the guard.
-		saved_bcast := _owned_app_signals_block()
-		defer _owned_app_signals_restore(saved_bcast)
-		_owned_cancel_mask_self()
-		defer _owned_cancel_unmask_self()
-		// Acquisition needs no timeout workaround: every holder masks cancel
-		// across its run and performs only bounded work, so termination
-		// cannot strand the lock and the holder's own deadline ends its run
-		// one way (completion) or the other (whole-process fatal). Still
-		// pre-mutation: nothing has changed if it waits.
-		for intrinsics.atomic_exchange(&broadcast_lock, 1) != 0 {
-			_ = intrinsics.syscall(_SYS_sched_yield)
-		}
-		defer intrinsics.atomic_exchange(&broadcast_lock, 0)
-		// No heap snapshot: every sweep below walks the live list under a
-		// short signal-masked take. The broadcast runs strictly post-startup
-		// in user call context, never in a handler or child — but user
-		// handlers may call INTO it, so it must stay allocation-free and
-		// re-entry safe regardless of caller context.
 
-		// Argument copy BEFORE any mutation (arg-copy preflight): the odd
-		// epoch marks the torn window for concurrent bring-up readers,
-		// which retry until the commit below closes it.
+		// Keep readers out while applying the caller. A failed syscall
+		// closes the epoch without changing the last committed operation.
 		intrinsics.atomic_store(&broadcast_epoch, intrinsics.atomic_load(&broadcast_epoch) + 1)
-		intrinsics.atomic_store(&broadcast_kind, kind)
-		intrinsics.atomic_store(&broadcast_a, a)
-		intrinsics.atomic_store(&broadcast_b, b)
-		intrinsics.atomic_store(&broadcast_c, c)
-		// The caller applies first so later-created threads inherit the new
-		// credentials. Failure here mutates nothing (peers untouched), so
-		// the error stays ordinary; the epoch is closed again so no reader
-		// can mistake the copied-but-uncommitted args for live state, and
-		// the seq bump below never ran, which is what commits an op.
 		if self_res := _owned_apply_cred_op(kind, a, b, c); self_res != 0 {
 			intrinsics.atomic_store(&broadcast_epoch, intrinsics.atomic_load(&broadcast_epoch) + 1)
 			return self_res
 		}
-		// atomic_add returns the previous value; +1 keeps 0 as the
-		// never-broadcast sentinel for entries initialized before traffic.
-		// The bump commits the op; the even close pairs with sequentially
-		// consistent readers over the whole published op. Past this point
-		// every failure ends the process: mutation is possible and rollback
-		// is not.
+		intrinsics.atomic_store(&broadcast_kind, kind)
+		intrinsics.atomic_store(&broadcast_a, a)
+		intrinsics.atomic_store(&broadcast_b, b)
+		intrinsics.atomic_store(&broadcast_c, c)
 		seq := intrinsics.atomic_add(&broadcast_seq, 1) + 1
+		if entry := owned_self_entry; entry != nil {
+			intrinsics.atomic_store(&entry.apply_result, 0)
+			intrinsics.atomic_store(&entry.ack, seq)
+		}
 		intrinsics.atomic_store(&broadcast_epoch, intrinsics.atomic_load(&broadcast_epoch) + 1)
+		if cap <= 1 {
+			return 0
+		}
 		self := _raw_gettid()
 
 		deadline := _owned_monotonic_ns() + 2_000_000_000
