@@ -565,6 +565,8 @@ gb_internal lbAddr lb_add_local_generated(lbProcedure *p, Type *type, bool zero_
 
 gb_internal lbValue lb_emit_runtime_call(lbProcedure *p, char const *c_name, Array<lbValue> const &args);
 gb_internal lbValue lb_lookup_runtime_procedure(lbModule *m, String const &name);
+gb_internal void lb_configure_native_memory_providers(lbModule *m);
+gb_internal bool lb_native_memory_is_provider_entity(lbModule *m, Entity *e);
 gb_internal bool lb_lower_native_memory(lbModule *m);
 gb_internal unsigned lb_alignment_at_offset(unsigned alignment, i64 offset, i64 size);
 

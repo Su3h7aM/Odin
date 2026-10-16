@@ -1901,6 +1901,11 @@ gb_internal void lb_emit_memmove(lbProcedure *p, LLVMValueRef dst, unsigned dst_
 		}
 	}
 
+	// A provider body must not call another provider. Emit the intrinsic so the late sweep lowers it or the guard reports it.
+	if (lb_native_memory_is_provider_entity(m, p->entity)) {
+		LLVMBuildMemMove(p->builder, dst, dst_align, src, src_align, len);
+		return;
+	}
 	if (build_context.metrics.os == TargetOs_linux && build_context.metrics.arch == TargetArch_amd64 &&
 	    build_context.sanitizer_flags == 0) {
 		auto args = array_make<lbValue>(temporary_allocator(), 3);

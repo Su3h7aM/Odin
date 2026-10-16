@@ -383,3 +383,148 @@ test_rollback :: proc(t: ^testing.T) {
 	basic_sanity_test(t, mem.rollback_stack_allocator(&rb), N / 8)
 	basic_sanity_test(t, mem.rollback_stack_allocator(&rb), N / 8)
 }
+
+// Returns the first index where a and b differ, or -1. Slices must have equal length.
+first_diff :: proc(a, b: []u8) -> int {
+	for i in 0..<len(a) {
+		if a[i] != b[i] {
+			return i
+		}
+	}
+	return -1
+}
+
+// Scalar references. Kept out of inlining and optimization so they never lower to the native providers under test.
+@(optimization_mode="none")
+ref_copy :: #force_no_inline proc(dst, src: []u8, n: int) {
+	for k in 0..<n {
+		dst[k] = src[k]
+	}
+}
+
+// In-place move of buf[s:s+n] to buf[d:d+n], walking in the direction that keeps overlapping source bytes intact.
+@(optimization_mode="none")
+ref_move :: #force_no_inline proc(buf: []u8, d, s, n: int) {
+	if d > s {
+		for k := n; k > 0; {
+			k -= 1
+			buf[d+k] = buf[s+k]
+		}
+	} else {
+		for k in 0..<n {
+			buf[d+k] = buf[s+k]
+		}
+	}
+}
+
+@(optimization_mode="none")
+ref_fill :: #force_no_inline proc(dst: []u8, val: u8, n: int) {
+	for k in 0..<n {
+		dst[k] = val
+	}
+}
+
+// Sizes straddle the native kernel boundaries: 16/32, 64, 128, and the 256-byte dispatch threshold.
+// 256..300 is listed in full: every residue mod 32 is hit at the AVX2 bulk entry sizes.
+NATIVE_MEM_SIZES := [?]int{
+	0, 1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255,
+	256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293, 294, 295, 296, 297, 298, 299, 300,
+	511, 512, 1025,
+}
+
+@(test)
+test_native_memory_copy_boundaries :: proc(t: ^testing.T) {
+	BUF :: 2048
+	sizes := NATIVE_MEM_SIZES
+	src, dst, exp: [BUF]u8
+
+	for size in sizes {
+		for off in 0..<4 {
+			for doff in 0..<32 {
+				for i in 0..<BUF {
+					src[i] = u8(i*7 + 3)
+				}
+				ref_fill(dst[:], 0xEE, BUF)
+				ref_fill(exp[:], 0xEE, BUF)
+				ref_copy(exp[doff:], src[off:], size)
+				mem.copy_non_overlapping(raw_data(dst[doff:]), raw_data(src[off:]), size)
+				i := first_diff(dst[:], exp[:])
+				testing.expectf(t, i < 0, "copy_non_overlapping size=%d off=%d doff=%d differs at %d", size, off, doff, i)
+			}
+		}
+	}
+}
+
+@(test)
+test_native_memory_move_overlap :: proc(t: ^testing.T) {
+	BUF :: 2048
+	sizes := NATIVE_MEM_SIZES
+	dists := [?]int{1, 3, 8, 16, 17, 32, 33, 64, 65}
+	buf, exp: [BUF]u8
+
+	for size in sizes {
+		for dist in dists {
+			for pos in 0..<32 {
+				for backward in 0..<2 {
+					// backward == 0: dst < src (forward copy). backward == 1: dst > src (backward copy).
+					s, d := pos + dist, pos
+					if backward == 1 {
+						s, d = pos, pos + dist
+					}
+					for i in 0..<BUF {
+						buf[i] = u8(i*13 + 1)
+					}
+					ref_copy(exp[:], buf[:], BUF)
+					ref_move(exp[:], d, s, size)
+					mem.copy(raw_data(buf[d:]), raw_data(buf[s:]), size)
+					i := first_diff(buf[:], exp[:])
+					testing.expectf(t, i < 0, "copy size=%d dist=%d pos=%d backward=%d differs at %d", size, dist, pos, backward, i)
+				}
+			}
+		}
+	}
+}
+
+@(test)
+test_native_memory_set_boundaries :: proc(t: ^testing.T) {
+	BUF :: 2048
+	sizes := NATIVE_MEM_SIZES
+	vals := [?]u8{0x00, 0x5C, 0xFF}
+	buf, exp: [BUF]u8
+
+	for size in sizes {
+		for off in 0..<71 {
+			for val in vals {
+				ref_fill(buf[:], 0x5A, BUF)
+				ref_fill(exp[:], 0x5A, BUF)
+				ref_fill(exp[off:], val, size)
+				mem.set(raw_data(buf[off:]), val, size)
+				i := first_diff(buf[:], exp[:])
+				testing.expectf(t, i < 0, "set size=%d off=%d val=%d differs at %d", size, off, val, i)
+			}
+		}
+	}
+}
+
+@(test)
+test_native_memory_zero_boundaries :: proc(t: ^testing.T) {
+	BUF :: 2048
+	sizes := NATIVE_MEM_SIZES
+	buf, exp: [BUF]u8
+
+	for size in sizes {
+		for off in 0..<32 {
+			ref_fill(buf[:], 0x5A, BUF)
+			ref_fill(exp[:], 0x5A, BUF)
+			ref_fill(exp[off:], 0, size)
+			mem.zero(raw_data(buf[off:]), size)
+			i := first_diff(buf[:], exp[:])
+			testing.expectf(t, i < 0, "zero size=%d off=%d differs at %d", size, off, i)
+
+			ref_fill(buf[:], 0x5A, BUF)
+			mem.zero_explicit(raw_data(buf[off:]), size)
+			i = first_diff(buf[:], exp[:])
+			testing.expectf(t, i < 0, "zero_explicit size=%d off=%d differs at %d", size, off, i)
+		}
+	}
+}

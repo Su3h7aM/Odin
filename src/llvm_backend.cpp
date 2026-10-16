@@ -3075,6 +3075,8 @@ gb_internal WORKER_TASK_PROC(lb_llvm_module_pass_worker_proc) {
 		}
 	}
 
+	lb_configure_native_memory_providers(wd->m);
+
 	LLVMErrorRef llvm_err = LLVMRunPasses(wd->m->mod, passes_str, wd->target_machine, pb_options);
 
 	defer (LLVMConsumeError(llvm_err));

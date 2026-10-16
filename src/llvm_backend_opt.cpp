@@ -1042,10 +1042,98 @@ gb_internal void lb_lower_small_switch(lbFastIselLowering *s, LLVMValueRef sw) {
 	}
 }
 
+gb_internal bool lb_native_memory_target(void) {
+	return build_context.metrics.os == TargetOs_linux && build_context.metrics.arch == TargetArch_amd64;
+}
+
+// Calls a native provider must never make. Checked in every mode, since the sweep does not run under LTO or sanitizers.
+gb_internal bool lb_native_memory_is_libc_memop(LLVMValueRef callee) {
+	String name = {};
+	name.text = cast(u8 *)LLVMGetValueName2(callee, cast(size_t *)&name.len);
+	String const names[] = {
+		str_lit("memcpy"), str_lit("memmove"), str_lit("memset"),
+		str_lit("__asan_memcpy"), str_lit("__asan_memmove"), str_lit("__asan_memset"),
+		str_lit("__msan_memcpy"), str_lit("__msan_memmove"), str_lit("__msan_memset"),
+		str_lit("__tsan_memcpy"), str_lit("__tsan_memmove"), str_lit("__tsan_memset"),
+	};
+	for (String const &s : names) {
+		if (str_eq(name, s)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+gb_internal bool lb_native_memory_provider_tagged(LLVMValueRef fn) {
+	char const *key = "odin-native-memory-provider";
+	LLVMAttributeRef attr = LLVMGetStringAttributeAtIndex(fn, LLVMAttributeIndex_FunctionIndex, key, cast(unsigned)gb_strlen(key));
+	return attr != nullptr && LLVMIsStringAttribute(attr);
+}
+
+// Runs before LLVMRunPasses in every module. Providers are found by runtime entity identity, without creating or enqueuing procedures.
+// Gated only on target, not on LTO or sanitizers: the provider bodies are optimized in every such build, so they always need the no-builtin tags.
+// Every native provider and kernel, by runtime procedure name. Identity is the resolved runtime Entity, never a name prefix.
+gb_internal char const *const lb_native_memory_provider_names[] = {
+	"native_memcpy", "native_memmove", "native_memset", "native_memset_small",
+	"native_memmove_volatile", "native_memset_volatile",
+	"native_memcpy_sse2", "native_memcpy_avx2",
+	"native_memmove_sse2", "native_memmove_avx2",
+	"native_memset_sse2", "native_memset_avx2",
+	"native_memset_volatile_sse2", "native_memset_volatile_avx2",
+	"volatile_copy_forward", "volatile_copy_backward",
+};
+
+// True when e is one of the native provider entities. Does not create or enqueue procedures.
+gb_internal bool lb_native_memory_is_provider_entity(lbModule *m, Entity *e) {
+	if (e == nullptr || !lb_native_memory_target()) {
+		return false;
+	}
+	AstPackage *pkg = m->info->runtime_package;
+	for (char const *name : lb_native_memory_provider_names) {
+		if (e == scope_lookup_current(pkg->scope, string_interner_insert(make_string_c(name)))) {
+			return true;
+		}
+	}
+	return false;
+}
+
+gb_internal void lb_configure_native_memory_providers(lbModule *m) {
+	if (!lb_native_memory_target()) {
+		return;
+	}
+
+	Entity *entities[gb_count_of(lb_native_memory_provider_names)] = {};
+	AstPackage *pkg = m->info->runtime_package;
+	for (usize i = 0; i < gb_count_of(lb_native_memory_provider_names); i++) {
+		entities[i] = scope_lookup_current(pkg->scope, string_interner_insert(make_string_c(lb_native_memory_provider_names[i])));
+		GB_ASSERT_MSG(entities[i] != nullptr, "Native memory provider not found: %s", lb_native_memory_provider_names[i]);
+	}
+
+	for (LLVMValueRef fn = LLVMGetFirstFunction(m->mod); fn != nullptr; fn = LLVMGetNextFunction(fn)) {
+		Entity **found = map_get(&m->procedure_values, fn);
+		if (found == nullptr || *found == nullptr || LLVMIsDeclaration(fn)) {
+			continue;
+		}
+		bool is_provider = false;
+		for (Entity *e : entities) {
+			is_provider |= e == *found;
+		}
+		if (!is_provider) {
+			continue;
+		}
+		LLVMAddAttributeAtIndex(fn, LLVMAttributeIndex_FunctionIndex, lb_create_string_attribute(m->ctx, str_lit("odin-native-memory-provider"), str_lit("")));
+		LLVMAddAttributeAtIndex(fn, LLVMAttributeIndex_FunctionIndex, lb_create_string_attribute(m->ctx, str_lit("no-builtin-memcpy"), str_lit("")));
+		LLVMAddAttributeAtIndex(fn, LLVMAttributeIndex_FunctionIndex, lb_create_string_attribute(m->ctx, str_lit("no-builtin-memmove"), str_lit("")));
+		LLVMAddAttributeAtIndex(fn, LLVMAttributeIndex_FunctionIndex, lb_create_string_attribute(m->ctx, str_lit("no-builtin-memset"), str_lit("")));
+	}
+}
+
 gb_internal bool lb_lower_native_memory(lbModule *m) {
-	if (!lb_native_memory_lowering_enabled()) {
+	if (!lb_native_memory_target()) {
 		return true;
 	}
+	// Without the sweep, provider bodies are only checked, never rewritten.
+	bool lower = lb_native_memory_lowering_enabled();
 
 	enum {Copy, Move, Fill, VolatileMove, VolatileFill, SmallFill, ProviderCount};
 	char const *names[ProviderCount] = {
@@ -1053,8 +1141,10 @@ gb_internal bool lb_lower_native_memory(lbModule *m) {
 		"native_memmove_volatile", "native_memset_volatile", "native_memset_small",
 	};
 	LLVMValueRef providers[ProviderCount] = {};
-	for (unsigned i = 0; i < ProviderCount; i++) {
-		providers[i] = lb_lookup_runtime_procedure(m, make_string_c(names[i])).value;
+	if (lower) {
+		for (unsigned i = 0; i < ProviderCount; i++) {
+			providers[i] = lb_lookup_runtime_procedure(m, make_string_c(names[i])).value;
+		}
 	}
 
 	unsigned copy_id = LLVMLookupIntrinsicID("llvm.memcpy", gb_strlen("llvm.memcpy"));
@@ -1062,6 +1152,7 @@ gb_internal bool lb_lower_native_memory(lbModule *m) {
 	unsigned fill_id = LLVMLookupIntrinsicID("llvm.memset", gb_strlen("llvm.memset"));
 	unsigned inline_copy_id = LLVMLookupIntrinsicID("llvm.memcpy.inline", gb_strlen("llvm.memcpy.inline"));
 	unsigned inline_move_id = LLVMLookupIntrinsicID("llvm.memmove.inline", gb_strlen("llvm.memmove.inline"));
+	unsigned inline_fill_id = LLVMLookupIntrinsicID("llvm.memset.inline", gb_strlen("llvm.memset.inline"));
 	unsigned align_id = LLVMGetEnumAttributeKindForName("align", gb_strlen("align"));
 
 	LLVMBuilderRef builder = LLVMCreateBuilderInContext(m->ctx);
@@ -1070,10 +1161,14 @@ gb_internal bool lb_lower_native_memory(lbModule *m) {
 	defer (array_free(&work));
 
 	for (LLVMValueRef fn = LLVMGetFirstFunction(m->mod); fn != nullptr; fn = LLVMGetNextFunction(fn)) {
-		bool provider_body = false;
+		bool provider_body = lb_native_memory_provider_tagged(fn);
 		for (LLVMValueRef provider : providers) {
 			provider_body |= provider == fn;
 		}
+		if (!lower && !provider_body) {
+			continue;
+		}
+		bool provider_violation = false;
 		array_clear(&work);
 		for (LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(fn); bb != nullptr; bb = LLVMGetNextBasicBlock(bb)) {
 			for (LLVMValueRef inst = LLVMGetFirstInstruction(bb); inst != nullptr; inst = LLVMGetNextInstruction(inst)) {
@@ -1087,8 +1182,15 @@ gb_internal bool lb_lower_native_memory(lbModule *m) {
 				unsigned id = LLVMGetIntrinsicID(callee);
 				if (id != 0 && (id == copy_id || id == move_id || id == fill_id)) {
 					array_add(&work, inst);
+				} else if (provider_body && lb_native_memory_is_libc_memop(callee)) {
+					provider_violation = true;
 				}
 			}
+		}
+		if (!lower) {
+			// Nothing is rewritten without the sweep, so any surviving memory intrinsic is a violation.
+			provider_violation |= work.count != 0;
+			array_clear(&work);
 		}
 
 		for (LLVMValueRef inst : work) {
@@ -1154,12 +1256,23 @@ gb_internal bool lb_lower_native_memory(lbModule *m) {
 				continue;
 			}
 
-			unsigned inline_id = id == copy_id ? inline_copy_id : inline_move_id;
-			if (!is_volatile && !fill && size <= 64 && inline_id != 0) {
-				LLVMTypeRef types[3] = {LLVMTypeOf(dst), LLVMTypeOf(src_or_byte), LLVMTypeOf(len)};
-				LLVMValueRef callee = LLVMGetIntrinsicDeclaration(m->mod, inline_id, types, 3);
-				LLVMValueRef args[4] = {dst, src_or_byte, len, volatile_arg};
-				LLVMValueRef call = LLVMBuildCall2(builder, LLVMIntrinsicGetType(m->ctx, inline_id, types, 3), callee, args, 4, "");
+			// Provider bodies may expand constant operations up to 128 bytes. Other bodies keep the 64-byte copy limit.
+			u64 inline_limit = provider_body ? 128 : 64;
+			// llvm.memmove.inline does not exist in LLVM, so a move never takes the inline branch. Outside provider bodies it becomes a provider call; inside them it is reported as a violation.
+			unsigned inline_id = fill ? inline_fill_id : id == copy_id ? inline_copy_id : inline_move_id;
+			if (!is_volatile && size <= inline_limit && (!fill || provider_body) && inline_id != 0) {
+				LLVMValueRef call = nullptr;
+				if (fill) {
+					LLVMTypeRef types[2] = {LLVMTypeOf(dst), LLVMTypeOf(len)};
+					LLVMValueRef callee = LLVMGetIntrinsicDeclaration(m->mod, inline_fill_id, types, 2);
+					LLVMValueRef args[4] = {dst, src_or_byte, len, volatile_arg};
+					call = LLVMBuildCall2(builder, LLVMIntrinsicGetType(m->ctx, inline_fill_id, types, 2), callee, args, 4, "");
+				} else {
+					LLVMTypeRef types[3] = {LLVMTypeOf(dst), LLVMTypeOf(src_or_byte), LLVMTypeOf(len)};
+					LLVMValueRef callee = LLVMGetIntrinsicDeclaration(m->mod, inline_id, types, 3);
+					LLVMValueRef args[4] = {dst, src_or_byte, len, volatile_arg};
+					call = LLVMBuildCall2(builder, LLVMIntrinsicGetType(m->ctx, inline_id, types, 3), callee, args, 4, "");
+				}
 				for (unsigned index = 1; index <= 2; index++) {
 					if (LLVMAttributeRef attr = LLVMGetCallSiteEnumAttribute(inst, index, align_id)) {
 						LLVMAddCallSiteAttribute(call, index, attr);
@@ -1171,8 +1284,8 @@ gb_internal bool lb_lower_native_memory(lbModule *m) {
 
 			// Never introduce a recursive provider call from a kernel body.
 			if (provider_body) {
-				gb_printf_err("Native Linux x64 memory provider contains a non-inline memory operation\n");
-				return false;
+				provider_violation = true;
+				break;
 			}
 			unsigned provider_index = fill ? (is_volatile ? VolatileFill : Fill) :
 			                          is_volatile ? VolatileMove : id == copy_id ? Copy : Move;
@@ -1186,6 +1299,10 @@ gb_internal bool lb_lower_native_memory(lbModule *m) {
 			LLVMValueRef call = LLVMBuildCall2(builder, LLVMGlobalGetValueType(callee), callee, args, 3, "");
 			LLVMSetInstructionCallConv(call, LLVMGetFunctionCallConv(callee));
 			LLVMInstructionEraseFromParent(inst);
+		}
+		if (provider_violation) {
+			gb_printf_err("Native Linux x64 memory provider contains a non-inline memory operation\n");
+			return false;
 		}
 	}
 	return true;
